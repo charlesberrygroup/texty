@@ -1,0 +1,98 @@
+/*
+ * display.h — Terminal Rendering (ncurses)
+ * =============================================================================
+ * This module owns everything related to drawing on the terminal screen.
+ * It uses the ncurses library to position text, apply colors, and read the
+ * terminal size.
+ *
+ * Screen layout
+ * -------------
+ *
+ *   col:  0         GUTTER_WIDTH           term_cols-1
+ *         |              |                      |
+ *   row 0 |  1           |  line 1 text ...     |
+ *   row 1 |  2           |  line 2 text ...     |
+ *       . |  .           |  ...                 |
+ *       . |  .           |  ...                 |
+ *  last-1 | [status bar: filename  ln:col  mode]|
+ *
+ * The gutter shows 4-digit line numbers followed by a space (e.g. "  42 ").
+ * The status bar is a highlighted row at the very bottom of the terminal.
+ *
+ * ncurses coordinate convention: move(row, col) — row 0 is the TOP of the
+ * screen, col 0 is the LEFT edge.
+ * =============================================================================
+ */
+
+#ifndef DISPLAY_H
+#define DISPLAY_H
+
+/* Forward declaration — avoids a circular include with editor.h */
+struct Editor;
+
+/* ---- Constants ------------------------------------------------------------ */
+
+/**
+ * Width of the line-number gutter in columns.
+ *
+ * 4 digits + 1 space = "9999 " fits lines up to 9,999.
+ * If you want 5-digit support, bump this to 6.
+ */
+#define GUTTER_WIDTH  5
+
+/* ---- Color pair IDs -------------------------------------------------------
+ *
+ * ncurses uses numbered "color pairs" — a foreground/background combination.
+ * We define symbolic names here so the rest of the code never uses magic
+ * numbers when calling COLOR_PAIR().
+ *
+ * NOTE: CPAIR_DEFAULT and CPAIR_CURLINE are intentionally NOT registered with
+ * init_pair() in display.c.  On macOS, the system ncurses has a bug where
+ * passing -1 (terminal default) to init_pair() results in COLOR_BLACK instead
+ * of the actual terminal default, which causes black-on-black invisible text.
+ * Instead:
+ *   - Normal text uses attrset(A_NORMAL) — clears all attributes.
+ *   - Cursor-line highlight uses A_REVERSE — swaps fg/bg, works everywhere.
+ */
+#define CPAIR_DEFAULT      1   /* Reserved — not currently used          */
+#define CPAIR_GUTTER       2   /* Line number text                       */
+#define CPAIR_STATUS       3   /* Status bar (clean file)                */
+#define CPAIR_STATUS_DIRTY 4   /* Status bar when file has unsaved edits */
+#define CPAIR_CURLINE      5   /* Reserved — not currently used          */
+
+/* ---- Functions ------------------------------------------------------------ */
+
+/**
+ * display_init — set up ncurses.
+ *
+ * Call once at startup, before any rendering.  Configures raw mode, disables
+ * echo, enables special-key recognition, and sets up color pairs.
+ */
+void display_init(void);
+
+/**
+ * display_cleanup — restore the terminal to its original state.
+ *
+ * Call once before the program exits.
+ */
+void display_cleanup(void);
+
+/**
+ * display_update_size — read the current terminal dimensions into the editor.
+ *
+ * Call at startup and whenever SIGWINCH fires (terminal was resized).
+ */
+void display_update_size(struct Editor *ed);
+
+/**
+ * display_render — redraw the entire screen.
+ *
+ * Call once per iteration of the main event loop, after processing input.
+ * Draws:
+ *   1. The text content of the current buffer (with line numbers in the gutter)
+ *   2. The status bar at the bottom
+ *   3. Positions the terminal cursor at the editor cursor position
+ */
+void display_render(struct Editor *ed);
+
+#endif /* DISPLAY_H */
