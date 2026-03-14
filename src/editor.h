@@ -100,6 +100,21 @@ typedef struct Editor {
      * NULL if nothing has been copied yet.
      */
     char    *clipboard;
+
+    /*
+     * Search state
+     * ------------
+     * search_query     The current search string.  Empty string means no
+     *                  active search (highlights are off).
+     *
+     * search_match_row / search_match_col
+     *                  Position of the match that the cursor jumped to most
+     *                  recently (the one shown with the green highlight).
+     *                  -1 / -1 when no match has been found yet.
+     */
+    char     search_query[256];
+    int      search_match_row;
+    int      search_match_col;
 } Editor;
 
 /* ---- Lifecycle ------------------------------------------------------------ */
@@ -224,6 +239,38 @@ void editor_backspace(Editor *ed);
  * At end of line, joins the current line with the one below it.
  */
 void editor_delete_char(Editor *ed);
+
+/* ---- Search & Replace ----------------------------------------------------- */
+
+/**
+ * editor_search_clear — clear the active search (removes all highlights).
+ */
+void editor_search_clear(Editor *ed);
+
+/**
+ * editor_find — prompt for a search string and jump to the first match
+ * after the cursor.  Wraps around to the start of the file if needed.
+ */
+void editor_find(Editor *ed);
+
+/**
+ * editor_find_next — jump to the next match of the current search query.
+ * Calls editor_find() if no query is set.  Wraps around.
+ */
+void editor_find_next(Editor *ed);
+
+/**
+ * editor_find_prev — jump to the previous match.  Wraps around.
+ */
+void editor_find_prev(Editor *ed);
+
+/**
+ * editor_replace — prompt for a search string and a replacement string,
+ * then replace every occurrence in the current buffer.  Each replacement
+ * is recorded individually in the undo history (Ctrl+Z undoes them one
+ * by one in reverse order).
+ */
+void editor_replace(Editor *ed);
 
 /* ---- Selection ------------------------------------------------------------ */
 

@@ -68,6 +68,8 @@ struct Editor;
 #define CPAIR_SELECTION    6   /* Selected text highlight                */
 #define CPAIR_TAB_ACTIVE   7   /* Active buffer tab in the tab bar       */
 #define CPAIR_TAB_INACTIVE 8   /* Inactive buffer tab in the tab bar     */
+#define CPAIR_SEARCH_MATCH 9   /* A search match (not the current one)   */
+#define CPAIR_SEARCH_CUR  10   /* The currently highlighted search match */
 
 /* ---- Functions ------------------------------------------------------------ */
 

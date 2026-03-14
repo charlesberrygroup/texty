@@ -98,6 +98,14 @@ void display_init(void)
          */
         init_pair(CPAIR_TAB_ACTIVE,   COLOR_WHITE,   COLOR_BLUE);
         init_pair(CPAIR_TAB_INACTIVE, COLOR_BLACK,   COLOR_WHITE);
+
+        /*
+         * Search-match highlight colors.
+         * CPAIR_SEARCH_MATCH — every match of the search query (yellow bg).
+         * CPAIR_SEARCH_CUR   — the match the cursor is sitting on (green bg).
+         */
+        init_pair(CPAIR_SEARCH_MATCH, COLOR_BLACK,   COLOR_YELLOW);
+        init_pair(CPAIR_SEARCH_CUR,   COLOR_BLACK,   COLOR_GREEN);
     }
 }
 
@@ -215,6 +223,120 @@ static void draw_tab_bar(struct Editor *ed)
 /* ============================================================================
  * Internal: draw the editor area (buffer content + gutter)
  * ============================================================================ */
+
+/* ============================================================================
+ * Internal: per-character line renderer (used when search is active)
+ * ============================================================================ */
+
+/*
+ * col_in_selection — return 1 if buffer position (buf_row, buf_col) falls
+ * inside the normalized selection [sel_sr/sc .. sel_er/ec).
+ */
+static int col_in_selection(int sel_active,
+                             int sel_sr, int sel_sc, int sel_er, int sel_ec,
+                             int buf_row, int buf_col)
+{
+    if (!sel_active) return 0;
+    if (buf_row < sel_sr || buf_row > sel_er) return 0;
+    int row_start = (buf_row == sel_sr) ? sel_sc : 0;
+    int row_end   = (buf_row == sel_er) ? sel_ec : (1 << 30);
+    return buf_col >= row_start && buf_col < row_end;
+}
+
+/*
+ * col_in_any_match — return 1 if column buf_col on a line falls inside any
+ * occurrence of `query` (length qlen) within `line_text`.
+ *
+ * A match at start position p covers columns [p, p+qlen).  We check all
+ * start positions p where p <= buf_col < p+qlen (i.e. p in
+ * [buf_col-qlen+1, buf_col]).
+ */
+static int col_in_any_match(const char *line_text, int line_len,
+                             int buf_col,
+                             const char *query, int qlen)
+{
+    if (qlen <= 0) return 0;
+
+    int p_start = buf_col - qlen + 1;
+    if (p_start < 0) p_start = 0;
+
+    for (int p = p_start; p <= buf_col && p + qlen <= line_len; p++) {
+        if (strncmp(line_text + p, query, qlen) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+/*
+ * draw_line_with_search — render one line of text character-by-character,
+ * applying search-match, selection, and cursor-row highlights with the
+ * correct priority:
+ *
+ *   current match  >  any other match  >  selection  >  row highlight
+ *
+ * Parameters
+ * ----------
+ *   buf_row     Buffer row being rendered (used for selection checks).
+ *   draw_start  Pointer to the first visible character.
+ *   draw_len    Number of characters to draw.
+ *   view_col    First visible buffer column (for coordinate conversion).
+ *   row_attr    Base attribute for this row (A_REVERSE or A_NORMAL).
+ *   sel_*       Normalized selection bounds (pass sel_active=0 to disable).
+ *   ed          The editor (for search_query, search_match_row/col).
+ */
+static void draw_line_with_search(int buf_row,
+                                   const char *line_text, int line_len,
+                                   const char *draw_start, int draw_len,
+                                   int view_col, int row_attr,
+                                   int sel_active,
+                                   int sel_sr, int sel_sc,
+                                   int sel_er, int sel_ec,
+                                   struct Editor *ed)
+{
+    const char *query      = ed->search_query;
+    int         qlen       = (int)strlen(query);
+    int         match_row  = ed->search_match_row;
+    int         match_col  = ed->search_match_col;
+
+    for (int i = 0; i < draw_len; i++) {
+        int buf_col = view_col + i;
+
+        int attr;
+
+        if (match_row == buf_row
+                && buf_col >= match_col
+                && buf_col < match_col + qlen) {
+            /*
+             * This character is part of the CURRENT (jumped-to) match.
+             * Show it with the green highlight.
+             */
+            attr = COLOR_PAIR(CPAIR_SEARCH_CUR) | A_BOLD;
+
+        } else if (col_in_any_match(line_text, line_len, buf_col, query, qlen)) {
+            /*
+             * This character is part of some other match of the query.
+             * Show it with the yellow highlight.
+             */
+            attr = COLOR_PAIR(CPAIR_SEARCH_MATCH);
+
+        } else if (col_in_selection(sel_active,
+                                     sel_sr, sel_sc, sel_er, sel_ec,
+                                     buf_row, buf_col)) {
+            attr = COLOR_PAIR(CPAIR_SELECTION);
+
+        } else {
+            attr = row_attr;
+        }
+
+        attrset(attr);
+        /*
+         * Cast to unsigned char before passing to addch.  Without this,
+         * characters with codes > 127 (non-ASCII) would be sign-extended
+         * to a negative int, which ncurses might misinterpret.
+         */
+        addch((unsigned char)draw_start[i]);
+    }
+}
 
 static void draw_editor_area(struct Editor *ed)
 {
@@ -355,47 +477,63 @@ static void draw_editor_area(struct Editor *ed)
                                    && (row_sel_start != row_sel_end)
                                    && (vis_sel_start < vis_sel_end);
 
-        if (!has_selection_on_row) {
-            /* No selection on this row — render the whole line with row_attr */
+        int search_active = (ed->search_query[0] != '\0');
+
+        if (search_active) {
+            /*
+             * Search mode: use the per-character renderer so we can apply
+             * search-match highlights on top of selection and row highlights.
+             * After rendering characters, fill the rest of the line normally.
+             */
+            if (draw_len > 0) {
+                draw_line_with_search(buf_row,
+                                      line_text, line_len,
+                                      draw_start, draw_len,
+                                      start_col, row_attr,
+                                      sel_active,
+                                      sel_sr, sel_sc, sel_er, sel_ec,
+                                      ed);
+            }
+            attrset(row_attr);
+            clrtoeol();
+            attrset(A_NORMAL);
+
+        } else if (!has_selection_on_row) {
+            /* No search, no selection — render the whole line with row_attr */
             attrset(row_attr);
             if (draw_len > 0)
                 addnstr(draw_start, draw_len);
+            clrtoeol();
+            attrset(A_NORMAL);
         } else {
             /*
-             * Split the line into three segments and render each with the
-             * correct attribute:
+             * No search but selection present: split into up to three segments.
              *
-             *   [0 .. vis_sel_start)          row_attr   (before selection)
+             *   [0 .. vis_sel_start)          row_attr
              *   [vis_sel_start .. vis_sel_end) CPAIR_SELECTION
-             *   [vis_sel_end .. draw_len)      row_attr   (after selection)
+             *   [vis_sel_end .. draw_len)      row_attr
              */
 
-            /* Segment 1: before the selection */
             if (vis_sel_start > 0) {
                 attrset(row_attr);
                 addnstr(draw_start, vis_sel_start);
             }
 
-            /* Segment 2: inside the selection */
             attrset(A_NORMAL);
             attron(COLOR_PAIR(CPAIR_SELECTION));
-            if (vis_sel_end > vis_sel_start) {
-                int seg_len = vis_sel_end - vis_sel_start;
-                addnstr(draw_start + vis_sel_start, seg_len);
-            }
+            if (vis_sel_end > vis_sel_start)
+                addnstr(draw_start + vis_sel_start, vis_sel_end - vis_sel_start);
             attroff(COLOR_PAIR(CPAIR_SELECTION));
 
-            /* Segment 3: after the selection */
             if (vis_sel_end < draw_len) {
                 attrset(row_attr);
                 addnstr(draw_start + vis_sel_end, draw_len - vis_sel_end);
             }
-        }
 
-        /* Fill the rest of the line with the row's base attribute */
-        attrset(row_attr);
-        clrtoeol();
-        attrset(A_NORMAL);
+            attrset(row_attr);
+            clrtoeol();
+            attrset(A_NORMAL);
+        }
     }
 }
 

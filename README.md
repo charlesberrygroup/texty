@@ -10,6 +10,7 @@ A terminal-based IDE written in C, built from scratch.
 - Visual selection with Shift+Arrow keys
 - Copy, cut, and paste (Ctrl+C / Ctrl+X / Ctrl+V)
 - Multiple open buffers with a tab bar (Ctrl+N / Ctrl+O / Ctrl+W)
+- Search and replace (Ctrl+F / F3 / Shift+F3 / Ctrl+R)
 - Arrow keys, Home/End, Page Up/Down, Ctrl+Home/End
 - Save with Ctrl+S, quit with Ctrl+Q
 - Line number gutter
@@ -77,6 +78,19 @@ Produces the `./texty` binary.
 | Ctrl+W           | Close current buffer (confirm if unsaved) |
 | Ctrl+Right       | Next buffer                          |
 | Ctrl+Left        | Previous buffer                      |
+
+### Search
+
+| Key              | Action                                       |
+|------------------|----------------------------------------------|
+| Ctrl+F           | Find (prompts for search string)             |
+| F3               | Find next match                              |
+| Shift+F3         | Find previous match                          |
+| Ctrl+R           | Replace all occurrences (prompts for both)   |
+| Escape           | Clear search highlights                      |
+
+> **Note:** Search is case-sensitive. Ctrl+H cannot be used for Replace because
+> it maps to the same byte as Backspace in most terminals.
 
 ### File
 

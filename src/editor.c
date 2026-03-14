@@ -178,6 +178,12 @@ static int editor_cols(const Editor *ed)
 void editor_init(Editor *ed)
 {
     memset(ed, 0, sizeof(Editor));
+    /*
+     * -1 means "no match found yet".  memset sets them to 0, so we
+     * override here to avoid treating row 0 as a valid match on startup.
+     */
+    ed->search_match_row = -1;
+    ed->search_match_col = -1;
     /* editor_new_buffer will be called by the caller (main.c) */
 }
 
@@ -770,6 +776,324 @@ void editor_delete_char(Editor *ed)
 
     ed->desired_col = ed->cursor_col;
     editor_scroll(ed);
+}
+
+/* ============================================================================
+ * Search & Replace — internal helpers
+ * ============================================================================ */
+
+/*
+ * search_forward — find the first occurrence of `query` (length `qlen`) at or
+ * after position (from_row, from_col) in the buffer.
+ *
+ * Uses strncmp for a straightforward byte-by-byte match (case-sensitive).
+ * Does NOT wrap — callers handle wrapping.
+ *
+ * Returns 1 and sets *out_row / *out_col if a match is found, 0 otherwise.
+ */
+static int search_forward(Buffer *buf, const char *query, int qlen,
+                           int from_row, int from_col,
+                           int *out_row, int *out_col)
+{
+    for (int row = from_row; row < buf->num_lines; row++) {
+        const char *line     = buffer_get_line(buf, row);
+        int         line_len = buffer_line_len(buf, row);
+        int         col_start = (row == from_row) ? from_col : 0;
+
+        for (int col = col_start; col + qlen <= line_len; col++) {
+            if (strncmp(line + col, query, qlen) == 0) {
+                *out_row = row;
+                *out_col = col;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/*
+ * search_backward — find the last occurrence of `query` strictly before
+ * position (from_row, from_col).
+ *
+ * Scans lines in reverse, and within each line scans columns in reverse
+ * to find the rightmost match that precedes the given position.
+ *
+ * Returns 1 and sets *out_row / *out_col if found, 0 otherwise.
+ */
+static int search_backward(Buffer *buf, const char *query, int qlen,
+                            int from_row, int from_col,
+                            int *out_row, int *out_col)
+{
+    for (int row = from_row; row >= 0; row--) {
+        const char *line     = buffer_get_line(buf, row);
+        int         line_len = buffer_line_len(buf, row);
+
+        /*
+         * On the starting row, only consider columns strictly before from_col.
+         * The -1 means the match must START before from_col.
+         */
+        int col_end = (row == from_row) ? from_col - 1 : line_len - qlen;
+
+        for (int col = col_end; col >= 0; col--) {
+            if (col + qlen <= line_len
+                    && strncmp(line + col, query, qlen) == 0) {
+                *out_row = row;
+                *out_col = col;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/*
+ * jump_to_match — move the editor cursor to the found match and scroll.
+ */
+static void jump_to_match(Editor *ed, int row, int col)
+{
+    ed->search_match_row = row;
+    ed->search_match_col = col;
+    ed->cursor_row       = row;
+    ed->cursor_col       = col;
+    ed->desired_col      = col;
+    editor_scroll(ed);
+}
+
+/* ============================================================================
+ * Search & Replace — public API
+ * ============================================================================ */
+
+void editor_search_clear(Editor *ed)
+{
+    ed->search_query[0]  = '\0';
+    ed->search_match_row = -1;
+    ed->search_match_col = -1;
+}
+
+void editor_find(Editor *ed)
+{
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf) return;
+
+    char *query = display_prompt(ed, "Find: ");
+    if (!query) return;   /* user pressed Escape */
+
+    if (query[0] == '\0') {
+        /* Empty query clears the search */
+        editor_search_clear(ed);
+        free(query);
+        return;
+    }
+
+    /* Store the query */
+    strncpy(ed->search_query, query, sizeof(ed->search_query) - 1);
+    ed->search_query[sizeof(ed->search_query) - 1] = '\0';
+    free(query);
+
+    int qlen = (int)strlen(ed->search_query);
+    int match_row, match_col;
+
+    /*
+     * Start searching from the cursor position.  If we find a match
+     * at the cursor itself, that counts — useful when re-searching after
+     * editing.  For "find next" we start one column ahead.
+     */
+    if (search_forward(buf, ed->search_query, qlen,
+                        ed->cursor_row, ed->cursor_col,
+                        &match_row, &match_col)) {
+        jump_to_match(ed, match_row, match_col);
+        editor_set_status(ed, "F3: next  Shift+F3: prev  Ctrl+R: replace  Esc: clear");
+    } else if (search_forward(buf, ed->search_query, qlen,
+                                0, 0, &match_row, &match_col)) {
+        /* Wrap around from the top */
+        jump_to_match(ed, match_row, match_col);
+        editor_set_status(ed, "Wrapped.  F3: next  Shift+F3: prev  Ctrl+R: replace");
+    } else {
+        ed->search_match_row = -1;
+        ed->search_match_col = -1;
+        editor_set_status(ed, "Not found: %s", ed->search_query);
+    }
+}
+
+void editor_find_next(Editor *ed)
+{
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf) return;
+
+    /* If no query is set, open the find prompt */
+    if (ed->search_query[0] == '\0') {
+        editor_find(ed);
+        return;
+    }
+
+    int qlen      = (int)strlen(ed->search_query);
+    int from_row  = (ed->search_match_row >= 0) ? ed->search_match_row : ed->cursor_row;
+    int from_col  = (ed->search_match_col >= 0) ? ed->search_match_col + qlen
+                                                 : ed->cursor_col + 1;
+    int match_row, match_col;
+
+    if (search_forward(buf, ed->search_query, qlen,
+                        from_row, from_col, &match_row, &match_col)) {
+        jump_to_match(ed, match_row, match_col);
+        editor_set_status(ed, "F3: next  Shift+F3: prev  Ctrl+R: replace  Esc: clear");
+    } else if (search_forward(buf, ed->search_query, qlen,
+                                0, 0, &match_row, &match_col)) {
+        jump_to_match(ed, match_row, match_col);
+        editor_set_status(ed, "Wrapped to first match.");
+    } else {
+        editor_set_status(ed, "No matches for: %s", ed->search_query);
+    }
+}
+
+void editor_find_prev(Editor *ed)
+{
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf) return;
+
+    if (ed->search_query[0] == '\0') {
+        editor_find(ed);
+        return;
+    }
+
+    int qlen     = (int)strlen(ed->search_query);
+    int from_row = (ed->search_match_row >= 0) ? ed->search_match_row : ed->cursor_row;
+    int from_col = (ed->search_match_col >= 0) ? ed->search_match_col
+                                                : ed->cursor_col;
+    int match_row, match_col;
+
+    if (search_backward(buf, ed->search_query, qlen,
+                         from_row, from_col, &match_row, &match_col)) {
+        jump_to_match(ed, match_row, match_col);
+        editor_set_status(ed, "F3: next  Shift+F3: prev  Ctrl+R: replace  Esc: clear");
+    } else {
+        /* Wrap: find the last match in the buffer */
+        int last_row = buf->num_lines - 1;
+        int last_col = buffer_line_len(buf, last_row);
+        if (search_backward(buf, ed->search_query, qlen,
+                             last_row, last_col + 1, &match_row, &match_col)) {
+            jump_to_match(ed, match_row, match_col);
+            editor_set_status(ed, "Wrapped to last match.");
+        } else {
+            editor_set_status(ed, "No matches for: %s", ed->search_query);
+        }
+    }
+}
+
+void editor_replace(Editor *ed)
+{
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf) return;
+
+    /* Prompt for the search string */
+    char *query = display_prompt(ed, "Find: ");
+    if (!query || query[0] == '\0') {
+        free(query);
+        return;
+    }
+
+    /* Prompt for the replacement */
+    char *replacement = display_prompt(ed, "Replace with: ");
+    if (!replacement) {
+        free(query);
+        return;
+    }
+
+    /* Store the query so highlights update */
+    strncpy(ed->search_query, query, sizeof(ed->search_query) - 1);
+    ed->search_query[sizeof(ed->search_query) - 1] = '\0';
+
+    int qlen  = (int)strlen(query);
+    int count = 0;
+
+    /*
+     * Scan forward through the buffer replacing every occurrence.
+     * After each replacement, continue scanning from the end of the
+     * inserted replacement text to avoid re-matching within it.
+     *
+     * Each replacement is recorded as an UNDO_CUT + UNDO_PASTE pair so the
+     * user can step backwards through them with Ctrl+Z.
+     */
+    int row = 0, col = 0;
+    int match_row, match_col;
+
+    while (search_forward(buf, query, qlen, row, col, &match_row, &match_col)) {
+
+        /* --- Record UNDO_CUT for the deleted match --- */
+        UndoRecord cut_rec;
+        memset(&cut_rec, 0, sizeof(cut_rec));
+        cut_rec.type              = UNDO_CUT;
+        cut_rec.row               = match_row;
+        cut_rec.col               = match_col;
+        cut_rec.end_row           = match_row;
+        cut_rec.end_col           = match_col + qlen;
+        cut_rec.text              = strdup(query);   /* undo stack owns this */
+        cut_rec.cursor_row_before = match_row;
+        cut_rec.cursor_col_before = match_col;
+        cut_rec.cursor_row_after  = match_row;
+        cut_rec.cursor_col_after  = match_col;
+        undo_push(&buf->undo_stack, cut_rec);
+
+        /* Delete the matched text */
+        buffer_delete_region(buf, match_row, match_col,
+                                   match_row, match_col + qlen);
+
+        /* Insert the replacement */
+        int end_row, end_col;
+        insert_text_at(buf, match_row, match_col, replacement,
+                        &end_row, &end_col);
+
+        /* --- Record UNDO_PASTE for the inserted replacement --- */
+        UndoRecord paste_rec;
+        memset(&paste_rec, 0, sizeof(paste_rec));
+        paste_rec.type              = UNDO_PASTE;
+        paste_rec.row               = match_row;
+        paste_rec.col               = match_col;
+        paste_rec.end_row           = end_row;
+        paste_rec.end_col           = end_col;
+        paste_rec.text              = strdup(replacement);
+        paste_rec.cursor_row_before = match_row;
+        paste_rec.cursor_col_before = match_col;
+        paste_rec.cursor_row_after  = end_row;
+        paste_rec.cursor_col_after  = end_col;
+        undo_push(&buf->undo_stack, paste_rec);
+
+        undo_clear(&buf->redo_stack);
+
+        count++;
+
+        /* Continue from end of the replacement */
+        row = end_row;
+        col = end_col;
+
+        /*
+         * Guard against infinite loops when the replacement is empty
+         * (replacing "x" with "" would keep finding "x" at the same spot
+         * forever once the string is exhausted — but the search would
+         * naturally move forward since the replaced text is gone, so this
+         * is only needed when rlen == 0 AND the replacement is the same
+         * as the query, which can't happen with an empty replacement).
+         *
+         * Still, if qlen == 0 somehow, advance to avoid hanging.
+         */
+        if (qlen == 0) col++;
+    }
+
+    free(query);
+    free(replacement);
+
+    if (count > 0) {
+        /* Update search highlight to show the query on screen */
+        ed->search_match_row = -1;
+        ed->search_match_col = -1;
+        ed->cursor_row  = row;
+        ed->cursor_col  = col;
+        ed->desired_col = col;
+        editor_scroll(ed);
+        editor_set_status(ed, "Replaced %d occurrence%s.",
+                          count, count == 1 ? "" : "s");
+    } else {
+        editor_set_status(ed, "Not found: %s", ed->search_query);
+    }
 }
 
 /* ============================================================================

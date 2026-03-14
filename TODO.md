@@ -48,10 +48,11 @@ that all future phases will build on.
 - [x] Select all (Ctrl+A)
 
 ### Search & Replace
-- [ ] Find text (Ctrl+F)
-- [ ] Find next / previous (F3 / Shift+F3)
-- [ ] Replace (Ctrl+H)
-- [ ] Case-sensitive and regex toggle options
+- [x] Find text (Ctrl+F)
+- [x] Find next / previous (F3 / Shift+F3)
+- [x] Replace all (Ctrl+R — Ctrl+H conflicts with Backspace on ASCII level)
+- [ ] Case-sensitive toggle (currently always case-sensitive)
+- [ ] Regex support (deferred to Phase 3)
 
 ### Multiple Buffers (Tabs)
 - [x] Open new file in a new buffer (Ctrl+O)

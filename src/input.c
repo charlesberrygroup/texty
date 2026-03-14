@@ -209,6 +209,34 @@ void input_process_key(struct Editor *ed)
             break;
 
         /* ------------------------------------------------------------------ *
+         * Search & Replace
+         * ------------------------------------------------------------------ */
+
+        case CTRL('f'):        /* Ctrl+F — Find */
+            editor_find(ed);
+            break;
+
+        case KEY_F(3):         /* F3 — Find next */
+            editor_find_next(ed);
+            break;
+
+        case KEY_F(15):        /* Shift+F3 — Find previous
+                                * ncurses maps Shift+F(n) to F(n+12),
+                                * so Shift+F3 = F15. */
+            editor_find_prev(ed);
+            break;
+
+        case CTRL('r'):        /* Ctrl+R — Replace
+                                * Note: Ctrl+H cannot be used because it is
+                                * the same byte as Backspace (ASCII 8). */
+            editor_replace(ed);
+            break;
+
+        case 27:               /* Escape — clear search highlights */
+            editor_search_clear(ed);
+            break;
+
+        /* ------------------------------------------------------------------ *
          * Clipboard / selection
          * ------------------------------------------------------------------ */
 
@@ -229,22 +257,19 @@ void input_process_key(struct Editor *ed)
             break;
 
         /* ------------------------------------------------------------------ *
-         * Buffer switching — Ctrl+Right / Ctrl+Left
+         * Buffer switching — Ctrl+] / Ctrl+\
          *
-         * In xterm-256color (macOS Terminal, iTerm2), ncurses reports:
-         *   Ctrl+Right Arrow → key code 561
-         *   Ctrl+Left  Arrow → key code 546
+         * Ctrl+]  is ASCII 29 (GS, Group Separator) — next buffer.
+         * Ctrl+\  is ASCII 28 (FS, File Separator)  — previous buffer.
          *
-         * These are raw numeric values from the terminfo database for the
-         * xterm-256color terminal type.  If your terminal uses different
-         * codes, run `cat -v` and press the key to find the raw sequence,
-         * then look up the ncurses integer via `tput` or adjust these values.
+         * These are reliable control characters that all terminals send
+         * consistently, unlike Ctrl+Arrow which varies by terminal type.
          * ------------------------------------------------------------------ */
-        case 561:              /* Ctrl+Right — next buffer */
+        case 29:               /* Ctrl+] — next buffer */
             editor_next_buffer(ed);
             break;
 
-        case 546:              /* Ctrl+Left  — previous buffer */
+        case 28:               /* Ctrl+\ — previous buffer */
             editor_prev_buffer(ed);
             break;
 
