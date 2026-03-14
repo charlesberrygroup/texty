@@ -36,9 +36,9 @@ that all future phases will build on.
 ## Phase 2 — Editor Enhancements
 
 ### Undo / Redo
-- [ ] Undo last action (Ctrl+Z)
-- [ ] Redo (Ctrl+Y / Ctrl+Shift+Z)
-- [ ] Undo history limit (configurable)
+- [x] Undo last action (Ctrl+Z)
+- [x] Redo (Ctrl+Y / Ctrl+Shift+Z)
+- [x] Undo history limit (configurable)
 
 ### Clipboard & Selection
 - [ ] Visual selection mode (Shift+Arrow keys)

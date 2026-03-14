@@ -22,6 +22,8 @@
 #ifndef BUFFER_H
 #define BUFFER_H
 
+#include "undo.h"   /* UndoStack — each buffer tracks its own edit history */
+
 /* ---- Constants ------------------------------------------------------------ */
 
 /** Starting capacity (in bytes) for a freshly created Line's text array. */
@@ -53,13 +55,18 @@ typedef struct {
  *   capacity   How many Line slots are allocated in the array.
  *   filename   Heap-allocated path to the file on disk.  NULL for new files.
  *   dirty      Non-zero when there are unsaved changes.
+ *   undo_stack Stack of past operations — pop to undo.
+ *   redo_stack Stack of undone operations — pop to redo.
+ *              Cleared whenever a new edit is made.
  */
 typedef struct {
-    Line  *lines;
-    int    num_lines;
-    int    capacity;
-    char  *filename;
-    int    dirty;
+    Line      *lines;
+    int        num_lines;
+    int        capacity;
+    char      *filename;
+    int        dirty;
+    UndoStack  undo_stack;
+    UndoStack  redo_stack;
 } Buffer;
 
 /* ---- Lifecycle ------------------------------------------------------------ */

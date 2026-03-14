@@ -6,6 +6,7 @@
  */
 
 #include "buffer.h"
+#include "undo.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -103,6 +104,8 @@ Buffer *buffer_create(void)
     buf->capacity  = BUFFER_INITIAL_LINES;
     buf->filename  = NULL;
     buf->dirty     = 0;
+    undo_clear(&buf->undo_stack);
+    undo_clear(&buf->redo_stack);
 
     if (!buf->lines) {
         free(buf);

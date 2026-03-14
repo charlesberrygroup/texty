@@ -183,6 +183,26 @@ void editor_backspace(Editor *ed);
  */
 void editor_delete_char(Editor *ed);
 
+/* ---- Undo / Redo ---------------------------------------------------------- */
+
+/**
+ * editor_undo — reverse the most recent editing operation (Ctrl+Z).
+ *
+ * Pops one record off the current buffer's undo stack, reverses the
+ * operation, and pushes the record onto the redo stack.
+ * Does nothing (and shows a status message) if there is nothing to undo.
+ */
+void editor_undo(Editor *ed);
+
+/**
+ * editor_redo — re-apply the most recently undone operation (Ctrl+Y).
+ *
+ * Pops one record off the redo stack, re-applies the operation, and pushes
+ * the record back onto the undo stack.
+ * Does nothing (and shows a status message) if there is nothing to redo.
+ */
+void editor_redo(Editor *ed);
+
 /* ---- Misc ----------------------------------------------------------------- */
 
 /**

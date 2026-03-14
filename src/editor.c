@@ -11,6 +11,7 @@
 #include "editor.h"
 #include "buffer.h"
 #include "display.h"    /* for GUTTER_WIDTH */
+#include "undo.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -319,6 +320,25 @@ void editor_insert_char(Editor *ed, char c)
     Buffer *buf = editor_current_buffer(ed);
     if (!buf) return;
 
+    /*
+     * Record the undo entry BEFORE making the change.
+     * We store the cursor position before (for undo) and the expected
+     * cursor position after (cursor_col + 1, for redo).
+     */
+    UndoRecord rec;
+    rec.type              = UNDO_INSERT_CHAR;
+    rec.row               = ed->cursor_row;
+    rec.col               = ed->cursor_col;
+    rec.c                 = c;
+    rec.cursor_row_before = ed->cursor_row;
+    rec.cursor_col_before = ed->cursor_col;
+    rec.cursor_row_after  = ed->cursor_row;
+    rec.cursor_col_after  = ed->cursor_col + 1;
+    undo_push(&buf->undo_stack, rec);
+
+    /* Any new edit invalidates the redo history */
+    undo_clear(&buf->redo_stack);
+
     buffer_insert_char(buf, ed->cursor_row, ed->cursor_col, c);
 
     ed->cursor_col++;
@@ -330,6 +350,23 @@ void editor_insert_newline(Editor *ed)
 {
     Buffer *buf = editor_current_buffer(ed);
     if (!buf) return;
+
+    /*
+     * Record the split point.  To undo, we call join_lines(row), which
+     * joins line `row` with line `row+1` — exactly what Enter split apart.
+     */
+    UndoRecord rec;
+    rec.type              = UNDO_INSERT_NEWLINE;
+    rec.row               = ed->cursor_row;
+    rec.col               = ed->cursor_col;
+    rec.c                 = 0;               /* not used for newline */
+    rec.cursor_row_before = ed->cursor_row;
+    rec.cursor_col_before = ed->cursor_col;
+    rec.cursor_row_after  = ed->cursor_row + 1;
+    rec.cursor_col_after  = 0;
+    undo_push(&buf->undo_stack, rec);
+
+    undo_clear(&buf->redo_stack);
 
     buffer_insert_newline(buf, ed->cursor_row, ed->cursor_col);
 
@@ -344,16 +381,59 @@ void editor_backspace(Editor *ed)
     Buffer *buf = editor_current_buffer(ed);
     if (!buf) return;
 
+    UndoRecord rec;
+
     if (ed->cursor_col > 0) {
-        /* Delete the character to the left of the cursor */
-        buffer_delete_char(buf, ed->cursor_row, ed->cursor_col - 1);
+        /*
+         * Delete the character immediately to the LEFT of the cursor.
+         * We must read the character BEFORE deleting it — afterwards it's gone.
+         *
+         * buffer_get_line returns a pointer to the line's text array.
+         * Indexing with [cursor_col - 1] gives us the character to delete.
+         */
+        int  del_col = ed->cursor_col - 1;
+        char del_c   = buffer_get_line(buf, ed->cursor_row)[del_col];
+
+        rec.type              = UNDO_DELETE_CHAR;
+        rec.row               = ed->cursor_row;
+        rec.col               = del_col;
+        rec.c                 = del_c;
+        rec.cursor_row_before = ed->cursor_row;
+        rec.cursor_col_before = ed->cursor_col;
+        rec.cursor_row_after  = ed->cursor_row;
+        rec.cursor_col_after  = del_col;
+        undo_push(&buf->undo_stack, rec);
+        undo_clear(&buf->redo_stack);
+
+        buffer_delete_char(buf, ed->cursor_row, del_col);
         ed->cursor_col--;
+
     } else if (ed->cursor_row > 0) {
-        /* At column 0 — join with the line above */
-        int prev_len = buffer_line_len(buf, ed->cursor_row - 1);
-        buffer_join_lines(buf, ed->cursor_row - 1);
+        /*
+         * At column 0 — pressing Backspace joins this line with the one above.
+         * The join point is the current length of the line above (that's where
+         * the newline character effectively was).
+         *
+         * To undo a join, we call insert_newline(row-1, col=prev_line_len),
+         * which splits line (row-1) at the join point, restoring both lines.
+         */
+        int join_row = ed->cursor_row - 1;
+        int join_col = buffer_line_len(buf, join_row); /* length of line above */
+
+        rec.type              = UNDO_JOIN_LINES;
+        rec.row               = join_row;
+        rec.col               = join_col;
+        rec.c                 = 0;
+        rec.cursor_row_before = ed->cursor_row;
+        rec.cursor_col_before = 0;
+        rec.cursor_row_after  = join_row;
+        rec.cursor_col_after  = join_col;
+        undo_push(&buf->undo_stack, rec);
+        undo_clear(&buf->redo_stack);
+
+        buffer_join_lines(buf, join_row);
         ed->cursor_row--;
-        ed->cursor_col = prev_len;
+        ed->cursor_col = join_col;
     }
 
     ed->desired_col = ed->cursor_col;
@@ -366,18 +446,168 @@ void editor_delete_char(Editor *ed)
     if (!buf) return;
 
     int line_len = buffer_line_len(buf, ed->cursor_row);
+    UndoRecord rec;
 
     if (ed->cursor_col < line_len) {
-        /* Delete the character under the cursor */
+        /* Delete the character UNDER the cursor (at cursor_col) */
+        char del_c = buffer_get_line(buf, ed->cursor_row)[ed->cursor_col];
+
+        rec.type              = UNDO_DELETE_CHAR;
+        rec.row               = ed->cursor_row;
+        rec.col               = ed->cursor_col;
+        rec.c                 = del_c;
+        rec.cursor_row_before = ed->cursor_row;
+        rec.cursor_col_before = ed->cursor_col;
+        rec.cursor_row_after  = ed->cursor_row;
+        rec.cursor_col_after  = ed->cursor_col;  /* cursor stays put */
+        undo_push(&buf->undo_stack, rec);
+        undo_clear(&buf->redo_stack);
+
         buffer_delete_char(buf, ed->cursor_row, ed->cursor_col);
+
     } else if (ed->cursor_row < buf->num_lines - 1) {
-        /* At end of line — join with the line below */
+        /*
+         * At end of line — Delete joins this line with the one below.
+         * join_col is the current line length (= the join point).
+         */
+        int join_col = line_len;
+
+        rec.type              = UNDO_JOIN_LINES;
+        rec.row               = ed->cursor_row;
+        rec.col               = join_col;
+        rec.c                 = 0;
+        rec.cursor_row_before = ed->cursor_row;
+        rec.cursor_col_before = ed->cursor_col;
+        rec.cursor_row_after  = ed->cursor_row;
+        rec.cursor_col_after  = ed->cursor_col;
+        undo_push(&buf->undo_stack, rec);
+        undo_clear(&buf->redo_stack);
+
         buffer_join_lines(buf, ed->cursor_row);
     }
     /* If on the last line at end-of-line, nothing to delete */
 
     ed->desired_col = ed->cursor_col;
     editor_scroll(ed);
+}
+
+/* ============================================================================
+ * Undo / Redo
+ * ============================================================================ */
+
+void editor_undo(Editor *ed)
+{
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf) return;
+
+    UndoRecord rec;
+    if (!undo_pop(&buf->undo_stack, &rec)) {
+        editor_set_status(ed, "Nothing to undo.");
+        return;
+    }
+
+    /*
+     * Reverse the recorded operation using the buffer's low-level functions
+     * directly.  We bypass the editor_* wrappers to avoid accidentally
+     * recording a new undo entry for the reversal itself.
+     *
+     * After reversing, restore the cursor to where it was BEFORE the original
+     * edit, then push this record to the redo stack so the user can redo it.
+     */
+    switch (rec.type) {
+
+        case UNDO_INSERT_CHAR:
+            /*
+             * Undo an insert: delete the character that was inserted.
+             * It is at (rec.row, rec.col) — exactly where it was put.
+             */
+            buffer_delete_char(buf, rec.row, rec.col);
+            break;
+
+        case UNDO_DELETE_CHAR:
+            /*
+             * Undo a delete: re-insert the character that was removed.
+             * `rec.c` holds the deleted character; `rec.row/col` is
+             * where it lived.
+             */
+            buffer_insert_char(buf, rec.row, rec.col, rec.c);
+            break;
+
+        case UNDO_INSERT_NEWLINE:
+            /*
+             * Undo an Enter press: re-join the two lines that were split.
+             * join_lines(row) merges line `row` with line `row+1`,
+             * which is exactly what the Enter split.
+             */
+            buffer_join_lines(buf, rec.row);
+            break;
+
+        case UNDO_JOIN_LINES:
+            /*
+             * Undo a line join: re-split the merged line at the join point.
+             * insert_newline(row, col) splits line `row` at column `col`.
+             */
+            buffer_insert_newline(buf, rec.row, rec.col);
+            break;
+    }
+
+    /* Restore cursor to where it was before the original edit */
+    ed->cursor_row  = rec.cursor_row_before;
+    ed->cursor_col  = rec.cursor_col_before;
+    ed->desired_col = ed->cursor_col;
+    editor_scroll(ed);
+
+    /* Push to redo stack so the user can redo this */
+    undo_push(&buf->redo_stack, rec);
+}
+
+void editor_redo(Editor *ed)
+{
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf) return;
+
+    UndoRecord rec;
+    if (!undo_pop(&buf->redo_stack, &rec)) {
+        editor_set_status(ed, "Nothing to redo.");
+        return;
+    }
+
+    /*
+     * Re-apply the original operation (forward direction this time).
+     * Then restore the cursor to where it was AFTER the original edit,
+     * and push the record back onto the undo stack.
+     */
+    switch (rec.type) {
+
+        case UNDO_INSERT_CHAR:
+            /* Redo an insert: put the character back */
+            buffer_insert_char(buf, rec.row, rec.col, rec.c);
+            break;
+
+        case UNDO_DELETE_CHAR:
+            /* Redo a delete: remove the character again */
+            buffer_delete_char(buf, rec.row, rec.col);
+            break;
+
+        case UNDO_INSERT_NEWLINE:
+            /* Redo an Enter: split the line again */
+            buffer_insert_newline(buf, rec.row, rec.col);
+            break;
+
+        case UNDO_JOIN_LINES:
+            /* Redo a join: merge the lines again */
+            buffer_join_lines(buf, rec.row);
+            break;
+    }
+
+    /* Restore cursor to where it was after the original edit */
+    ed->cursor_row  = rec.cursor_row_after;
+    ed->cursor_col  = rec.cursor_col_after;
+    ed->desired_col = ed->cursor_col;
+    editor_scroll(ed);
+
+    /* Push back onto the undo stack so the user can undo again */
+    undo_push(&buf->undo_stack, rec);
 }
 
 /* ============================================================================

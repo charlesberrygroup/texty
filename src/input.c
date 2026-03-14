@@ -181,6 +181,14 @@ void input_process_key(struct Editor *ed)
             editor_save(ed);
             break;
 
+        case CTRL('z'):        /* Ctrl+Z — Undo */
+            editor_undo(ed);
+            break;
+
+        case CTRL('y'):        /* Ctrl+Y — Redo */
+            editor_redo(ed);
+            break;
+
         case CTRL('q'):        /* Ctrl+Q — Quit */
             try_quit(ed);
             break;
