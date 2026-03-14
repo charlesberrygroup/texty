@@ -76,8 +76,8 @@ Produces the `./texty` binary.
 | Ctrl+N           | New empty buffer                     |
 | Ctrl+O           | Open file (prompts for path)         |
 | Ctrl+W           | Close current buffer (confirm if unsaved) |
-| Ctrl+Right       | Next buffer                          |
-| Ctrl+Left        | Previous buffer                      |
+| Ctrl+]           | Next buffer                          |
+| Ctrl+\           | Previous buffer                      |
 
 ### Search
 
@@ -99,9 +99,8 @@ Produces the `./texty` binary.
 | Ctrl+S           | Save                                 |
 | Ctrl+Q           | Quit (confirm if unsaved)            |
 
-> **Note:** Ctrl+Right / Ctrl+Left for buffer switching use key codes for
-> xterm-256color terminals (macOS Terminal, iTerm2). If they don't respond,
-> run `cat -v` and press the key to find your terminal's code.
+> **Note:** Ctrl+] / Ctrl+\ for buffer switching use ASCII control characters
+> (29 and 28) which are reliable across all terminal types.
 
 ## Project structure
 

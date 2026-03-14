@@ -57,7 +57,7 @@ that all future phases will build on.
 ### Multiple Buffers (Tabs)
 - [x] Open new file in a new buffer (Ctrl+O)
 - [x] Create new empty buffer (Ctrl+N)
-- [x] Switch between buffers (Ctrl+Right / Ctrl+Left)
+- [x] Switch between buffers (Ctrl+] / Ctrl+\)
 - [x] Close current buffer (Ctrl+W)
 - [x] Tab bar at the top showing open buffers
 
