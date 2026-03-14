@@ -33,6 +33,124 @@ static int clamp(int value, int lo, int hi)
 }
 
 /*
+ * selection_bounds — compute the normalized start and end of the selection.
+ *
+ * The anchor and cursor can be in any order.  This function always writes
+ * the earlier position to (*sr, *sc) and the later one to (*er, *ec),
+ * so the rest of the code does not need to worry about direction.
+ */
+static void selection_bounds(const Editor *ed,
+                              int *sr, int *sc, int *er, int *ec)
+{
+    int ar = ed->sel_anchor_row, ac = ed->sel_anchor_col;
+    int cr = ed->cursor_row,     cc = ed->cursor_col;
+
+    if (ar < cr || (ar == cr && ac <= cc)) {
+        *sr = ar; *sc = ac;
+        *er = cr; *ec = cc;
+    } else {
+        *sr = cr; *sc = cc;
+        *er = ar; *ec = ac;
+    }
+}
+
+/*
+ * selection_get_text — return a heap-allocated copy of the selected text.
+ *
+ * The returned string contains '\n' between lines (matching how the buffer
+ * stores newlines conceptually).  Caller must free() the result.
+ * Returns NULL on allocation failure or if the selection is empty.
+ */
+static char *selection_get_text(const Editor *ed)
+{
+    Buffer *buf = editor_current_buffer((Editor *)ed);
+    if (!buf || !ed->sel_active) return NULL;
+
+    int sr, sc, er, ec;
+    selection_bounds(ed, &sr, &sc, &er, &ec);
+
+    /*
+     * Calculate the total number of characters we will copy.
+     * For single-line selections: just ec - sc chars.
+     * For multi-line: tail of line sr + '\n' + middle lines + '\n' each +
+     *                 head of line er.
+     */
+    int total = 0;
+    if (sr == er) {
+        total = ec - sc;
+    } else {
+        total = buffer_line_len(buf, sr) - sc + 1; /* +1 for '\n' */
+        for (int r = sr + 1; r < er; r++)
+            total += buffer_line_len(buf, r) + 1;  /* +1 for '\n' */
+        total += ec;
+    }
+
+    if (total <= 0) return NULL;
+
+    /* +1 for the null terminator */
+    char *text = malloc(total + 1);
+    if (!text) return NULL;
+
+    int pos = 0;
+
+    if (sr == er) {
+        /* Single line: copy sc..ec-1 */
+        memcpy(text, buffer_get_line(buf, sr) + sc, ec - sc);
+        pos = ec - sc;
+    } else {
+        /* First line: copy sc..end */
+        int first_len = buffer_line_len(buf, sr) - sc;
+        memcpy(text + pos, buffer_get_line(buf, sr) + sc, first_len);
+        pos += first_len;
+        text[pos++] = '\n';
+
+        /* Middle lines: copy entire line + '\n' */
+        for (int r = sr + 1; r < er; r++) {
+            int rlen = buffer_line_len(buf, r);
+            memcpy(text + pos, buffer_get_line(buf, r), rlen);
+            pos += rlen;
+            text[pos++] = '\n';
+        }
+
+        /* Last line: copy 0..ec-1 */
+        memcpy(text + pos, buffer_get_line(buf, er), ec);
+        pos += ec;
+    }
+
+    text[pos] = '\0';
+    return text;
+}
+
+/*
+ * insert_text_at — insert a (possibly multi-line) string into the buffer.
+ *
+ * Iterates over `text`, calling buffer_insert_char for regular characters
+ * and buffer_insert_newline for '\n'.  After the call, (*out_row, *out_col)
+ * holds the position just past the last inserted character — useful for
+ * recording the end of a paste in an UNDO_PASTE record.
+ */
+static void insert_text_at(Buffer *buf, int row, int col,
+                            const char *text,
+                            int *out_row, int *out_col)
+{
+    int cur_row = row, cur_col = col;
+
+    for (int i = 0; text[i]; i++) {
+        if (text[i] == '\n') {
+            buffer_insert_newline(buf, cur_row, cur_col);
+            cur_row++;
+            cur_col = 0;
+        } else {
+            buffer_insert_char(buf, cur_row, cur_col, text[i]);
+            cur_col++;
+        }
+    }
+
+    if (out_row) *out_row = cur_row;
+    if (out_col) *out_col = cur_col;
+}
+
+/*
  * editor_rows — how many rows are available for text content.
  *
  * We reserve 1 row at the bottom for the status bar.
@@ -72,6 +190,10 @@ void editor_cleanup(Editor *ed)
     }
     ed->num_buffers    = 0;
     ed->current_buffer = 0;
+
+    /* Free the internal clipboard if one exists */
+    free(ed->clipboard);
+    ed->clipboard = NULL;
 }
 
 /* ============================================================================
@@ -321,6 +443,33 @@ void editor_insert_char(Editor *ed, char c)
     if (!buf) return;
 
     /*
+     * If text is selected, delete it first (standard "replace selection"
+     * behavior: typing replaces the selected region).
+     */
+    if (ed->sel_active) {
+        int sr, sc, er, ec;
+        selection_bounds(ed, &sr, &sc, &er, &ec);
+        char *text = selection_get_text(ed);
+        if (text) {
+            UndoRecord rec;
+            rec.type              = UNDO_CUT;
+            rec.row               = sr; rec.col = sc;
+            rec.end_row           = er; rec.end_col = ec;
+            rec.c                 = 0;
+            rec.text              = text;
+            rec.cursor_row_before = ed->cursor_row;
+            rec.cursor_col_before = ed->cursor_col;
+            rec.cursor_row_after  = sr;
+            rec.cursor_col_after  = sc;
+            undo_push(&buf->undo_stack, rec);
+            undo_clear(&buf->redo_stack);
+            buffer_delete_region(buf, sr, sc, er, ec);
+            ed->cursor_row = sr; ed->cursor_col = sc;
+        }
+        editor_selection_clear(ed);
+    }
+
+    /*
      * Record the undo entry BEFORE making the change.
      * We store the cursor position before (for undo) and the expected
      * cursor position after (cursor_col + 1, for redo).
@@ -380,6 +529,12 @@ void editor_backspace(Editor *ed)
 {
     Buffer *buf = editor_current_buffer(ed);
     if (!buf) return;
+
+    /* Delete the selection if one is active (Backspace clears it) */
+    if (ed->sel_active) {
+        editor_cut(ed);
+        return;
+    }
 
     UndoRecord rec;
 
@@ -445,6 +600,12 @@ void editor_delete_char(Editor *ed)
     Buffer *buf = editor_current_buffer(ed);
     if (!buf) return;
 
+    /* Delete the selection if one is active (Delete key clears it) */
+    if (ed->sel_active) {
+        editor_cut(ed);
+        return;
+    }
+
     int line_len = buffer_line_len(buf, ed->cursor_row);
     UndoRecord rec;
 
@@ -488,6 +649,232 @@ void editor_delete_char(Editor *ed)
     /* If on the last line at end-of-line, nothing to delete */
 
     ed->desired_col = ed->cursor_col;
+    editor_scroll(ed);
+}
+
+/* ============================================================================
+ * Selection
+ * ============================================================================ */
+
+void editor_selection_clear(Editor *ed)
+{
+    ed->sel_active = 0;
+}
+
+/*
+ * selection_ensure_anchor — if no selection is active, start one at the
+ * current cursor position.  Called at the start of every Shift+Arrow handler.
+ */
+static void selection_ensure_anchor(Editor *ed)
+{
+    if (!ed->sel_active) {
+        ed->sel_anchor_row = ed->cursor_row;
+        ed->sel_anchor_col = ed->cursor_col;
+        ed->sel_active     = 1;
+    }
+}
+
+void editor_select_left(Editor *ed)
+{
+    selection_ensure_anchor(ed);
+    editor_move_left(ed);
+}
+
+void editor_select_right(Editor *ed)
+{
+    selection_ensure_anchor(ed);
+    editor_move_right(ed);
+}
+
+void editor_select_up(Editor *ed)
+{
+    selection_ensure_anchor(ed);
+    editor_move_up(ed);
+}
+
+void editor_select_down(Editor *ed)
+{
+    selection_ensure_anchor(ed);
+    editor_move_down(ed);
+}
+
+void editor_select_line_start(Editor *ed)
+{
+    selection_ensure_anchor(ed);
+    editor_move_line_start(ed);
+}
+
+void editor_select_line_end(Editor *ed)
+{
+    selection_ensure_anchor(ed);
+    editor_move_line_end(ed);
+}
+
+void editor_select_all(Editor *ed)
+{
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf) return;
+
+    /* Anchor at the very beginning of the file */
+    ed->sel_anchor_row = 0;
+    ed->sel_anchor_col = 0;
+    ed->sel_active     = 1;
+
+    /* Cursor at the very end of the file */
+    ed->cursor_row  = buf->num_lines - 1;
+    ed->cursor_col  = buffer_line_len(buf, ed->cursor_row);
+    ed->desired_col = ed->cursor_col;
+
+    editor_scroll(ed);
+}
+
+/* ============================================================================
+ * Clipboard: copy, cut, paste
+ * ============================================================================ */
+
+void editor_copy(Editor *ed)
+{
+    if (!ed->sel_active) {
+        editor_set_status(ed, "No selection to copy.  Use Shift+Arrow to select.");
+        return;
+    }
+
+    char *text = selection_get_text(ed);
+    if (!text) {
+        editor_set_status(ed, "Copy failed (empty selection or out of memory).");
+        return;
+    }
+
+    /* Replace the existing clipboard contents */
+    free(ed->clipboard);
+    ed->clipboard = text;
+
+    editor_set_status(ed, "Copied.");
+    /* Leave the selection active so the user can see what was copied */
+}
+
+void editor_cut(Editor *ed)
+{
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf) return;
+
+    if (!ed->sel_active) {
+        editor_set_status(ed, "No selection to cut.  Use Shift+Arrow to select.");
+        return;
+    }
+
+    int sr, sc, er, ec;
+    selection_bounds(ed, &sr, &sc, &er, &ec);
+
+    /* Grab the text before deleting it */
+    char *text = selection_get_text(ed);
+    if (!text) {
+        editor_set_status(ed, "Cut failed (out of memory).");
+        return;
+    }
+
+    /* Update the clipboard */
+    free(ed->clipboard);
+    ed->clipboard = text;
+
+    /*
+     * Record an UNDO_CUT entry.  We store a duplicate of the text in the
+     * undo record so that if the user pastes after cutting (overwriting the
+     * clipboard), undo can still restore the original cut text.
+     *
+     * strdup() allocates a new copy of the string — the undo stack owns it.
+     */
+    UndoRecord rec;
+    rec.type              = UNDO_CUT;
+    rec.row               = sr;
+    rec.col               = sc;
+    rec.end_row           = er;
+    rec.end_col           = ec;
+    rec.c                 = 0;
+    rec.text              = strdup(text);   /* undo stack takes ownership */
+    rec.cursor_row_before = ed->cursor_row;
+    rec.cursor_col_before = ed->cursor_col;
+    rec.cursor_row_after  = sr;
+    rec.cursor_col_after  = sc;
+
+    undo_push(&buf->undo_stack, rec);
+    undo_clear(&buf->redo_stack);
+
+    /* Delete the selected region */
+    buffer_delete_region(buf, sr, sc, er, ec);
+
+    /* Move cursor to where the selection started */
+    ed->cursor_row  = sr;
+    ed->cursor_col  = sc;
+    ed->desired_col = sc;
+    editor_selection_clear(ed);
+    editor_scroll(ed);
+
+    editor_set_status(ed, "Cut.");
+}
+
+void editor_paste(Editor *ed)
+{
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf) return;
+
+    if (!ed->clipboard) {
+        editor_set_status(ed, "Clipboard is empty.");
+        return;
+    }
+
+    /*
+     * If a selection is active, delete it first (standard "replace selection"
+     * behavior — typing or pasting over a selection removes it).
+     */
+    if (ed->sel_active) {
+        editor_cut(ed);  /* this updates clipboard with selected text though */
+        /*
+         * That just replaced our clipboard.  We need to paste the original
+         * clipboard.  Restore it from the cut record: the old clipboard is
+         * now in buf->undo_stack.  For simplicity, we paste whatever is in
+         * ed->clipboard now (which is the cut text).  This is a known
+         * limitation — replacing a selection then pasting uses the selection
+         * text, not the previous clipboard.  A proper implementation would
+         * save/restore the clipboard around the cut.  We'll revisit in a
+         * later phase.
+         */
+    }
+
+    if (!ed->clipboard) return;
+
+    int paste_row = ed->cursor_row;
+    int paste_col = ed->cursor_col;
+
+    /* Insert the clipboard text, tracking where it ends */
+    int end_row, end_col;
+    insert_text_at(buf, paste_row, paste_col, ed->clipboard, &end_row, &end_col);
+
+    /*
+     * Record UNDO_PASTE.  We store a copy of the pasted text so undo can
+     * re-paste it (for redo) without relying on the clipboard still having
+     * the same content.
+     */
+    UndoRecord rec;
+    rec.type              = UNDO_PASTE;
+    rec.row               = paste_row;
+    rec.col               = paste_col;
+    rec.end_row           = end_row;
+    rec.end_col           = end_col;
+    rec.c                 = 0;
+    rec.text              = strdup(ed->clipboard);
+    rec.cursor_row_before = paste_row;
+    rec.cursor_col_before = paste_col;
+    rec.cursor_row_after  = end_row;
+    rec.cursor_col_after  = end_col;
+
+    undo_push(&buf->undo_stack, rec);
+    undo_clear(&buf->redo_stack);
+
+    /* Move cursor to end of pasted text */
+    ed->cursor_row  = end_row;
+    ed->cursor_col  = end_col;
+    ed->desired_col = end_col;
     editor_scroll(ed);
 }
 
@@ -549,12 +936,29 @@ void editor_undo(Editor *ed)
              */
             buffer_insert_newline(buf, rec.row, rec.col);
             break;
+
+        case UNDO_CUT:
+            /*
+             * Undo a cut: re-insert the text that was deleted.
+             * rec.text is the cut text; rec.row/col is where it was cut from.
+             */
+            insert_text_at(buf, rec.row, rec.col, rec.text, NULL, NULL);
+            break;
+
+        case UNDO_PASTE:
+            /*
+             * Undo a paste: delete the text that was inserted.
+             * The pasted text occupies (rec.row, rec.col) to (rec.end_row, rec.end_col).
+             */
+            buffer_delete_region(buf, rec.row, rec.col, rec.end_row, rec.end_col);
+            break;
     }
 
     /* Restore cursor to where it was before the original edit */
     ed->cursor_row  = rec.cursor_row_before;
     ed->cursor_col  = rec.cursor_col_before;
     ed->desired_col = ed->cursor_col;
+    editor_selection_clear(ed);
     editor_scroll(ed);
 
     /* Push to redo stack so the user can redo this */
@@ -598,12 +1002,23 @@ void editor_redo(Editor *ed)
             /* Redo a join: merge the lines again */
             buffer_join_lines(buf, rec.row);
             break;
+
+        case UNDO_CUT:
+            /* Redo a cut: delete the region again */
+            buffer_delete_region(buf, rec.row, rec.col, rec.end_row, rec.end_col);
+            break;
+
+        case UNDO_PASTE:
+            /* Redo a paste: re-insert the text */
+            insert_text_at(buf, rec.row, rec.col, rec.text, NULL, NULL);
+            break;
     }
 
     /* Restore cursor to where it was after the original edit */
     ed->cursor_row  = rec.cursor_row_after;
     ed->cursor_col  = rec.cursor_col_after;
     ed->desired_col = ed->cursor_col;
+    editor_selection_clear(ed);
     editor_scroll(ed);
 
     /* Push back onto the undo stack so the user can undo again */

@@ -80,6 +80,13 @@ void display_init(void)
         init_pair(CPAIR_GUTTER,       COLOR_CYAN,    -1);
         init_pair(CPAIR_STATUS,       COLOR_BLACK,   COLOR_CYAN);
         init_pair(CPAIR_STATUS_DIRTY, COLOR_BLACK,   COLOR_YELLOW);
+        /*
+         * CPAIR_SELECTION — selected text.
+         * We use explicit colors (no -1) to avoid the macOS ncurses bug
+         * described above.  Black text on cyan is visible on both light
+         * and dark terminal backgrounds, and is distinct from the gutter.
+         */
+        init_pair(CPAIR_SELECTION,    COLOR_BLACK,   COLOR_CYAN);
     }
 }
 
@@ -120,6 +127,31 @@ static void draw_editor_area(struct Editor *ed)
     /* Number of rows available for text (everything above the status bar) */
     int text_rows = ed->term_rows - 1;
 
+    /*
+     * Pre-compute selection bounds once, outside the row loop.
+     *
+     * The selection is defined by an anchor point (where Shift was first
+     * pressed) and the current cursor.  We normalize so that sel_sr/sel_sc
+     * is always the earlier position and sel_er/sel_ec the later one.
+     *
+     * If no selection is active, sel_active is 0 and we skip all of this.
+     */
+    int sel_active = ed->sel_active;
+    int sel_sr = 0, sel_sc = 0, sel_er = 0, sel_ec = 0;
+
+    if (sel_active) {
+        int ar = ed->sel_anchor_row, ac = ed->sel_anchor_col;
+        int cr = ed->cursor_row,     cc = ed->cursor_col;
+
+        if (ar < cr || (ar == cr && ac <= cc)) {
+            sel_sr = ar; sel_sc = ac;
+            sel_er = cr; sel_ec = cc;
+        } else {
+            sel_sr = cr; sel_sc = cc;
+            sel_er = ar; sel_ec = ac;
+        }
+    }
+
     for (int screen_row = 0; screen_row < text_rows; screen_row++) {
         int buf_row = ed->view_row + screen_row;
 
@@ -143,65 +175,126 @@ static void draw_editor_area(struct Editor *ed)
 
         attron(COLOR_PAIR(CPAIR_GUTTER));
         if (is_cursor_row) attron(A_BOLD);
-
-        /* Print 4-char line number (1-based for humans) + space */
         printw("%4d ", buf_row + 1);
-
         if (is_cursor_row) attroff(A_BOLD);
         attroff(COLOR_PAIR(CPAIR_GUTTER));
 
-        /* ---- Text content ------------------------------------------------ */
+        /* ---- Compute what portion of this row (if any) is selected ------- */
 
         /*
-         * Highlight the cursor row so the user can easily see which line
-         * they are on.
+         * row_sel_start and row_sel_end are column indices (in the buffer,
+         * not on screen) of the selected range on this row.
          *
-         * We use A_REVERSE (reverse video) which simply swaps the terminal's
-         * current foreground and background colors.  This is reliable on any
-         * terminal and any color scheme — no need to pick specific colors that
-         * might clash with the user's theme.
-         *
-         * For non-cursor rows we call attrset(A_NORMAL) which clears ALL
-         * attributes and lets the terminal use its own default colors.
-         * We do NOT use COLOR_PAIR(CPAIR_DEFAULT) because on macOS the system
-         * ncurses can misinterpret the -1 (default) color as COLOR_BLACK,
-         * producing invisible black-on-black text.
+         * row_sel_start == row_sel_end means nothing is selected on this row.
          */
-        if (is_cursor_row) {
-            attron(A_REVERSE);
-        } else {
-            attrset(A_NORMAL);
+        int row_sel_start = 0, row_sel_end = 0;
+
+        if (sel_active && buf_row >= sel_sr && buf_row <= sel_er) {
+            int line_len = buffer_line_len(buf, buf_row);
+
+            row_sel_start = (buf_row == sel_sr) ? sel_sc : 0;
+
+            if (buf_row == sel_er) {
+                row_sel_end = sel_ec;
+            } else {
+                /*
+                 * Middle rows of a multi-line selection: the entire line is
+                 * selected.  We extend the highlight one past the last char
+                 * so the selection visually covers the newline position too.
+                 */
+                row_sel_end = line_len + 1;
+            }
         }
+
+        /* ---- Set up the base attribute for unselected text on this row --- */
+
+        /*
+         * Cursor row uses A_REVERSE (reverse video) to highlight the line.
+         * Other rows use A_NORMAL (terminal defaults).
+         * Selected segments always use CPAIR_SELECTION regardless of row.
+         */
+        int row_attr = is_cursor_row ? A_REVERSE : A_NORMAL;
+
+        /* ---- Compute what slice of the line is visible on screen --------- */
 
         const char *line_text = buffer_get_line(buf, buf_row);
         int         line_len  = buffer_line_len(buf, buf_row);
         int         text_cols = ed->term_cols - GUTTER_WIDTH;
+        int         view_col  = ed->view_col;
 
-        /* Apply horizontal scrolling offset */
-        int start_col = ed->view_col;
-        if (start_col > line_len) start_col = line_len;
-
-        const char *draw_start = line_text + start_col;
-        int         draw_len   = line_len - start_col;
-
-        /* Clamp to visible columns */
+        /* Clamp view_col so we don't go past end of line */
+        int start_col = (view_col <= line_len) ? view_col : line_len;
+        int draw_len  = line_len - start_col;
         if (draw_len > text_cols) draw_len = text_cols;
 
-        if (draw_len > 0) {
+        /*
+         * draw_start points to the first character that will be rendered.
+         * All column positions below are relative to the start of the line
+         * (buffer coordinates), so we subtract view_col to convert to screen
+         * coordinates within the text area.
+         */
+        const char *draw_start = line_text + start_col;
+
+        /* ---- Render the line in up to three segments --------------------- */
+
+        /*
+         * Convert the selection range from buffer coords to screen coords
+         * (relative to the start of the visible text area).
+         * Clamp to [0, draw_len] so we never draw outside the visible area.
+         */
+        int vis_sel_start = row_sel_start - view_col;
+        int vis_sel_end   = row_sel_end   - view_col;
+
+        if (vis_sel_start < 0)         vis_sel_start = 0;
+        if (vis_sel_end   < 0)         vis_sel_end   = 0;
+        if (vis_sel_start > draw_len)  vis_sel_start = draw_len;
+        if (vis_sel_end   > draw_len)  vis_sel_end   = draw_len;
+
+        int has_selection_on_row = sel_active
+                                   && (row_sel_start != row_sel_end)
+                                   && (vis_sel_start < vis_sel_end);
+
+        if (!has_selection_on_row) {
+            /* No selection on this row — render the whole line with row_attr */
+            attrset(row_attr);
+            if (draw_len > 0)
+                addnstr(draw_start, draw_len);
+        } else {
             /*
-             * addnstr draws at most `draw_len` characters.
-             * We cannot use printw here because the line text may contain
-             * characters that printw would interpret as format specifiers.
+             * Split the line into three segments and render each with the
+             * correct attribute:
+             *
+             *   [0 .. vis_sel_start)          row_attr   (before selection)
+             *   [vis_sel_start .. vis_sel_end) CPAIR_SELECTION
+             *   [vis_sel_end .. draw_len)      row_attr   (after selection)
              */
-            addnstr(draw_start, draw_len);
+
+            /* Segment 1: before the selection */
+            if (vis_sel_start > 0) {
+                attrset(row_attr);
+                addnstr(draw_start, vis_sel_start);
+            }
+
+            /* Segment 2: inside the selection */
+            attrset(A_NORMAL);
+            attron(COLOR_PAIR(CPAIR_SELECTION));
+            if (vis_sel_end > vis_sel_start) {
+                int seg_len = vis_sel_end - vis_sel_start;
+                addnstr(draw_start + vis_sel_start, seg_len);
+            }
+            attroff(COLOR_PAIR(CPAIR_SELECTION));
+
+            /* Segment 3: after the selection */
+            if (vis_sel_end < draw_len) {
+                attrset(row_attr);
+                addnstr(draw_start + vis_sel_end, draw_len - vis_sel_end);
+            }
         }
 
-        /* Clear the rest of the line to remove any leftover characters */
+        /* Fill the rest of the line with the row's base attribute */
+        attrset(row_attr);
         clrtoeol();
-
-        if (is_cursor_row) {
-            attroff(A_REVERSE);
-        }
+        attrset(A_NORMAL);
     }
 }
 

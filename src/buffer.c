@@ -360,6 +360,85 @@ int buffer_join_lines(Buffer *buf, int row)
     return 0;
 }
 
+int buffer_delete_region(Buffer *buf, int sr, int sc, int er, int ec)
+{
+    /* Basic sanity checks */
+    if (sr < 0 || er >= buf->num_lines) return -1;
+    if (sc < 0 || ec < 0)              return -1;
+    if (sr > er || (sr == er && sc >= ec)) return 0; /* nothing to delete */
+
+    if (sr == er) {
+        /*
+         * Single-line case: delete chars sc..ec-1 on row sr.
+         * We do this with a single memmove — shift the characters after ec
+         * leftward to overwrite the deleted range.
+         */
+        Line *line = &buf->lines[sr];
+        if (ec > line->len) ec = line->len;
+        if (sc >= ec) return 0;
+
+        /*
+         * memmove is safe for overlapping regions.
+         * We copy (line->len - ec) chars (plus the '\0') to position sc.
+         */
+        memmove(line->text + sc,
+                line->text + ec,
+                line->len - ec + 1);   /* +1 to include the null terminator */
+        line->len -= (ec - sc);
+
+    } else {
+        /*
+         * Multi-line case.
+         *
+         * We want to keep:
+         *   - The first `sc` chars of line sr  (the "head")
+         *   - The chars from col ec to end of line er  (the "tail")
+         * and discard everything in between.
+         *
+         * Strategy:
+         *   1. Compute the tail length (chars remaining on line er after ec).
+         *   2. Grow line sr so it can hold head + tail.
+         *   3. Append the tail directly onto line sr.
+         *   4. Free lines sr+1 through er (they are fully deleted).
+         *   5. Shift all lines after er upward to close the gap.
+         */
+        Line *line_start = &buf->lines[sr];
+        Line *line_end   = &buf->lines[er];
+
+        /* Clamp ec to the actual length of line er */
+        if (ec > line_end->len) ec = line_end->len;
+
+        int tail_len = line_end->len - ec;
+
+        /* Grow line_start to hold sc chars + tail_len chars + null terminator */
+        if (line_ensure_cap(line_start, sc + tail_len) != 0) return -1;
+
+        /* Copy the tail of line er onto the end of line sr's head */
+        if (tail_len > 0)
+            memcpy(line_start->text + sc, line_end->text + ec, tail_len);
+        line_start->text[sc + tail_len] = '\0';
+        line_start->len = sc + tail_len;
+
+        /* Free every line between sr+1 and er (inclusive) */
+        int lines_to_remove = er - sr;   /* number of lines to delete */
+        for (int r = sr + 1; r <= er; r++)
+            line_free(&buf->lines[r]);
+
+        /*
+         * Shift all lines after er upward to close the gap.
+         * (buf->num_lines - er - 1) is the count of lines that remain after er.
+         */
+        memmove(&buf->lines[sr + 1],
+                &buf->lines[er + 1],
+                (buf->num_lines - er - 1) * sizeof(Line));
+
+        buf->num_lines -= lines_to_remove;
+    }
+
+    buf->dirty = 1;
+    return 0;
+}
+
 /* ============================================================================
  * Queries
  * ============================================================================ */

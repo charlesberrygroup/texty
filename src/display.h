@@ -59,6 +59,7 @@ struct Editor;
 #define CPAIR_STATUS       3   /* Status bar (clean file)                */
 #define CPAIR_STATUS_DIRTY 4   /* Status bar when file has unsaved edits */
 #define CPAIR_CURLINE      5   /* Reserved — not currently used          */
+#define CPAIR_SELECTION    6   /* Selected text highlight                */
 
 /* ---- Functions ------------------------------------------------------------ */
 

@@ -41,11 +41,11 @@ that all future phases will build on.
 - [x] Undo history limit (configurable)
 
 ### Clipboard & Selection
-- [ ] Visual selection mode (Shift+Arrow keys)
-- [ ] Copy selection (Ctrl+C)
-- [ ] Cut selection (Ctrl+X)
-- [ ] Paste (Ctrl+V)
-- [ ] Select all (Ctrl+A)
+- [x] Visual selection mode (Shift+Arrow keys)
+- [x] Copy selection (Ctrl+C)
+- [x] Cut selection (Ctrl+X)
+- [x] Paste (Ctrl+V)
+- [x] Select all (Ctrl+A)
 
 ### Search & Replace
 - [ ] Find text (Ctrl+F)

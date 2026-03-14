@@ -157,6 +157,23 @@ int buffer_insert_newline(Buffer *buf, int row, int col);
  */
 int buffer_join_lines(Buffer *buf, int row);
 
+/**
+ * buffer_delete_region — delete the text from (sr, sc) up to (er, ec).
+ *
+ * The region includes all characters from position (sr, sc) up to but NOT
+ * including position (er, ec).  This mirrors how a text selection works:
+ * the anchor and the cursor define the endpoints.
+ *
+ * If sr == er, only characters on that single line are deleted.
+ * If sr < er, the tail of line sr (from sc), all lines sr+1..er-1, and
+ * the head of line er (up to ec) are all removed, then the remaining
+ * pieces of line sr and line er are joined together.
+ *
+ * Returns 0 on success, -1 if the bounds are invalid.
+ * Marks the buffer dirty on success.
+ */
+int buffer_delete_region(Buffer *buf, int sr, int sc, int er, int ec);
+
 /* ---- Queries -------------------------------------------------------------- */
 
 /**

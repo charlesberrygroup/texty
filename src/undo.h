@@ -44,10 +44,12 @@
  * type alias so we can write "UndoType" instead of "enum UndoType".
  */
 typedef enum {
-    UNDO_INSERT_CHAR,     /* a single character was inserted   */
-    UNDO_DELETE_CHAR,     /* a single character was deleted    */
-    UNDO_INSERT_NEWLINE,  /* Enter was pressed, line was split */
-    UNDO_JOIN_LINES,      /* two lines were merged into one    */
+    UNDO_INSERT_CHAR,     /* a single character was inserted           */
+    UNDO_DELETE_CHAR,     /* a single character was deleted            */
+    UNDO_INSERT_NEWLINE,  /* Enter was pressed, line was split         */
+    UNDO_JOIN_LINES,      /* two lines were merged into one            */
+    UNDO_CUT,             /* a selection was cut (possibly multi-line) */
+    UNDO_PASTE,           /* clipboard text was pasted                 */
 } UndoType;
 
 /* ---- UndoRecord ------------------------------------------------------------ */
@@ -73,15 +75,40 @@ typedef enum {
  * we re-apply the operation and snap the cursor to `_after`.
  */
 typedef struct {
-    UndoType type;
-    int      row;
-    int      col;
-    char     c;                  /* only meaningful for INSERT_CHAR / DELETE_CHAR */
+    UndoType  type;
+    int       row;
+    int       col;
+    char      c;       /* only meaningful for INSERT_CHAR / DELETE_CHAR */
 
-    int      cursor_row_before;
-    int      cursor_col_before;
-    int      cursor_row_after;
-    int      cursor_col_after;
+    /*
+     * text — heap-allocated string for CUT and PASTE operations.
+     *
+     * For CUT:   the text that was deleted (may contain '\n' for multi-line).
+     * For PASTE: the text that was inserted (same as what was in clipboard).
+     * For all other types: NULL.
+     *
+     * IMPORTANT: whoever holds an UndoRecord with a non-NULL text pointer owns
+     * that memory.  undo_clear() and undo_push() (on overflow) free it.
+     * When an UndoRecord is moved from one stack to the other (during undo/redo),
+     * ownership transfers with it — do NOT free the pointer yourself.
+     */
+    char     *text;    /* NULL for single-char operations               */
+
+    /*
+     * end_row / end_col — used by CUT and PASTE to record where the affected
+     * region ends, so the inverse operation knows how much to delete/insert.
+     *
+     * For CUT:   the end of the selected region that was deleted.
+     * For PASTE: where the cursor ended up after pasting.
+     * For other types: unused (0).
+     */
+    int       end_row;
+    int       end_col;
+
+    int       cursor_row_before;
+    int       cursor_col_before;
+    int       cursor_row_after;
+    int       cursor_col_after;
 } UndoRecord;
 
 /* ---- UndoStack ------------------------------------------------------------- */

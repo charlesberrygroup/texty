@@ -93,63 +93,96 @@ void input_process_key(struct Editor *ed)
     switch (key) {
 
         /* ------------------------------------------------------------------ *
-         * Cursor movement
+         * Cursor movement — plain movement always clears the selection
          * ------------------------------------------------------------------ */
 
         case KEY_UP:
+            editor_selection_clear(ed);
             editor_move_up(ed);
             break;
 
         case KEY_DOWN:
+            editor_selection_clear(ed);
             editor_move_down(ed);
             break;
 
         case KEY_LEFT:
+            editor_selection_clear(ed);
             editor_move_left(ed);
             break;
 
         case KEY_RIGHT:
+            editor_selection_clear(ed);
             editor_move_right(ed);
             break;
 
         case KEY_HOME:
+            editor_selection_clear(ed);
             editor_move_line_start(ed);
             break;
 
         case KEY_END:
+            editor_selection_clear(ed);
             editor_move_line_end(ed);
             break;
 
         case KEY_PPAGE:    /* Page Up */
+            editor_selection_clear(ed);
             editor_page_up(ed);
             break;
 
         case KEY_NPAGE:    /* Page Down */
+            editor_selection_clear(ed);
             editor_page_down(ed);
             break;
 
+        /* ------------------------------------------------------------------ *
+         * Shift+Arrow — extend the selection
+         *
+         * ncurses names for shifted arrow keys:
+         *   KEY_SLEFT   Shift+Left
+         *   KEY_SRIGHT  Shift+Right
+         *   KEY_SR      Shift+Up   ("Scroll Reverse")
+         *   KEY_SF      Shift+Down ("Scroll Forward")
+         *   KEY_SHOME   Shift+Home  (also used by some terminals for Ctrl+Home)
+         *   KEY_SEND    Shift+End   (also used by some terminals for Ctrl+End)
+         *
+         * Note: on macOS Terminal, Shift+Home/End may not send these codes.
+         * Arrow keys are the most reliable.
+         * ------------------------------------------------------------------ */
+        case KEY_SLEFT:
+            editor_select_left(ed);
+            break;
+
+        case KEY_SRIGHT:
+            editor_select_right(ed);
+            break;
+
+        case KEY_SR:       /* Shift+Up */
+            editor_select_up(ed);
+            break;
+
+        case KEY_SF:       /* Shift+Down */
+            editor_select_down(ed);
+            break;
+
         /*
-         * Ctrl+Home and Ctrl+End: jump to beginning / end of file.
+         * Ctrl+Home / Ctrl+End — jump to start/end of file.
          *
-         * ncurses reports these as KEY_SHOME / KEY_SEND on some terminals,
-         * but the most portable way to detect Ctrl+Home is to check for the
-         * raw escape sequence.  Many modern terminals send KEY_HOME for Home
-         * and a different code for Ctrl+Home.
-         *
-         * For maximum compatibility we handle both KEY_SHOME/KEY_SEND
-         * (shifted variants that many terminals use for Ctrl+Home/End) and
-         * the raw values 1 (Ctrl+A) / 5 (Ctrl+E) as aliases.
-         *
-         * Note: some terminals send 554 for Ctrl+Home and 549 for Ctrl+End —
-         * these are also handled here via the KEY_SHOME/KEY_SEND constants.
+         * We no longer use KEY_SHOME / KEY_SEND here because those constants
+         * are now claimed by Shift+Home / Shift+End for selection.  Instead
+         * we rely on the raw numeric codes that xterm-256color sends:
+         *   554 = Ctrl+Home
+         *   549 = Ctrl+End
+         * These are the most reliable codes on macOS Terminal and iTerm2.
          */
-        case KEY_SHOME:    /* Ctrl+Home on many terminals */
-        case 554:          /* Ctrl+Home raw code (xterm-256color) */
+        case 554:          /* Ctrl+Home */
+            editor_selection_clear(ed);
             editor_move_file_start(ed);
             break;
 
-        case KEY_SEND:     /* Ctrl+End on many terminals */
-        case 549:          /* Ctrl+End raw code (xterm-256color) */
+        case 549:          /* Ctrl+End */
+            editor_selection_clear(ed);
             editor_move_file_end(ed);
             break;
 
@@ -171,6 +204,26 @@ void input_process_key(struct Editor *ed)
         case '\n':             /* Newline */
         case KEY_ENTER:        /* Numpad Enter */
             editor_insert_newline(ed);
+            break;
+
+        /* ------------------------------------------------------------------ *
+         * Clipboard / selection
+         * ------------------------------------------------------------------ */
+
+        case CTRL('a'):        /* Ctrl+A — Select all */
+            editor_select_all(ed);
+            break;
+
+        case CTRL('c'):        /* Ctrl+C — Copy */
+            editor_copy(ed);
+            break;
+
+        case CTRL('x'):        /* Ctrl+X — Cut */
+            editor_cut(ed);
+            break;
+
+        case CTRL('v'):        /* Ctrl+V — Paste */
+            editor_paste(ed);
             break;
 
         /* ------------------------------------------------------------------ *

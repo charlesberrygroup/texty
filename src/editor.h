@@ -77,6 +77,29 @@ typedef struct Editor {
 
     /* Non-zero when the editor should exit the main loop */
     int      should_quit;
+
+    /*
+     * Selection state
+     * ---------------
+     * A selection is active when sel_active != 0.  It spans from the anchor
+     * point to the current cursor position.  The anchor is set when the user
+     * starts a Shift+Arrow movement.  The cursor moves normally; the anchor
+     * stays fixed until the selection is cleared.
+     *
+     * Either endpoint can be the "earlier" one — display.c normalizes them.
+     */
+    int      sel_active;
+    int      sel_anchor_row;
+    int      sel_anchor_col;
+
+    /*
+     * Internal clipboard
+     * ------------------
+     * A heap-allocated string holding the most recently copied or cut text.
+     * May contain '\n' characters for multi-line content.
+     * NULL if nothing has been copied yet.
+     */
+    char    *clipboard;
 } Editor;
 
 /* ---- Lifecycle ------------------------------------------------------------ */
@@ -182,6 +205,59 @@ void editor_backspace(Editor *ed);
  * At end of line, joins the current line with the one below it.
  */
 void editor_delete_char(Editor *ed);
+
+/* ---- Selection ------------------------------------------------------------ */
+
+/**
+ * editor_selection_clear — deactivate any active selection.
+ *
+ * Call this before any plain (non-shift) cursor movement so the selection
+ * is dropped when the user moves without holding Shift.
+ */
+void editor_selection_clear(Editor *ed);
+
+/**
+ * editor_select_left / right / up / down — extend the selection by one unit.
+ *
+ * If no selection is active yet, the anchor is set at the current cursor
+ * position before moving.  The cursor then moves normally and the region
+ * between anchor and new cursor becomes the selection.
+ */
+void editor_select_left(Editor *ed);
+void editor_select_right(Editor *ed);
+void editor_select_up(Editor *ed);
+void editor_select_down(Editor *ed);
+void editor_select_line_start(Editor *ed);
+void editor_select_line_end(Editor *ed);
+
+/**
+ * editor_select_all — select the entire buffer contents (Ctrl+A).
+ */
+void editor_select_all(Editor *ed);
+
+/**
+ * editor_copy — copy the selected text to the internal clipboard (Ctrl+C).
+ *
+ * Does nothing (shows status message) if no selection is active.
+ * The selection is NOT cleared — the user can keep editing with it.
+ */
+void editor_copy(Editor *ed);
+
+/**
+ * editor_cut — copy the selected text then delete it (Ctrl+X).
+ *
+ * Records the deletion as a single UNDO_CUT entry so one Ctrl+Z restores it.
+ * Does nothing if no selection is active.
+ */
+void editor_cut(Editor *ed);
+
+/**
+ * editor_paste — insert the clipboard text at the cursor (Ctrl+V).
+ *
+ * Records the insertion as a single UNDO_PASTE entry.
+ * Does nothing if the clipboard is empty.
+ */
+void editor_paste(Editor *ed);
 
 /* ---- Undo / Redo ---------------------------------------------------------- */
 
