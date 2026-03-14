@@ -79,6 +79,27 @@ typedef struct Editor {
     int      should_quit;
 
     /*
+     * Tab width — number of spaces inserted when the user presses Tab.
+     * Defaults to 4.  Will be made configurable via config file in a later phase.
+     */
+    int      tab_width;
+
+    /*
+     * show_whitespace — when non-zero, spaces are rendered as a visible dot
+     * (·) so the user can see indentation and trailing spaces.
+     * Toggle with F2.
+     */
+    int      show_whitespace;
+
+    /*
+     * word_wrap — when non-zero, lines longer than the terminal width are
+     * wrapped visually onto the next screen row instead of being clipped.
+     * The buffer contents are not changed; this is display-only.
+     * Toggle with F4.
+     */
+    int      word_wrap;
+
+    /*
      * Selection state
      * ---------------
      * A selection is active when sel_active != 0.  It spans from the anchor
@@ -218,6 +239,29 @@ void editor_move_file_end(Editor *ed);
  * Advances the cursor one column to the right.
  */
 void editor_insert_char(Editor *ed, char c);
+
+/**
+ * editor_toggle_word_wrap — toggle word-wrap mode (F4).
+ *
+ * When on, lines wider than the terminal are wrapped visually.
+ * Buffer contents are never changed.
+ */
+void editor_toggle_word_wrap(Editor *ed);
+
+/**
+ * editor_toggle_whitespace — toggle visible whitespace rendering (F2).
+ *
+ * When on, spaces are drawn as '·' so indentation and trailing spaces are
+ * visible.  The toggle state is stored in ed->show_whitespace.
+ */
+void editor_toggle_whitespace(Editor *ed);
+
+/**
+ * editor_insert_tab — insert tab_width spaces at the cursor position (Tab key).
+ *
+ * Recorded as a single undo entry so one Ctrl+Z removes all the spaces at once.
+ */
+void editor_insert_tab(Editor *ed);
 
 /**
  * editor_insert_newline — insert a newline at the cursor position.

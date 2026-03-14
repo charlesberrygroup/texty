@@ -184,6 +184,7 @@ void editor_init(Editor *ed)
      */
     ed->search_match_row = -1;
     ed->search_match_col = -1;
+    ed->tab_width        = 4;   /* default: 4 spaces per Tab */
     /* editor_new_buffer will be called by the caller (main.c) */
 }
 
@@ -621,14 +622,101 @@ void editor_insert_char(Editor *ed, char c)
     editor_scroll(ed);
 }
 
+void editor_toggle_word_wrap(Editor *ed)
+{
+    ed->word_wrap = !ed->word_wrap;
+    /*
+     * Reset horizontal scroll when turning wrap on — there is nothing to
+     * scroll horizontally when lines are wrapped.
+     */
+    if (ed->word_wrap)
+        ed->view_col = 0;
+    editor_set_status(ed, "Word wrap %s (F4 to toggle)",
+                      ed->word_wrap ? "ON" : "OFF");
+    editor_scroll(ed);
+}
+
+void editor_toggle_whitespace(Editor *ed)
+{
+    ed->show_whitespace = !ed->show_whitespace;
+    editor_set_status(ed, "Whitespace display %s (F2 to toggle)",
+                      ed->show_whitespace ? "ON" : "OFF");
+}
+
+void editor_insert_tab(Editor *ed)
+{
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf) return;
+
+    /*
+     * Build a string of tab_width spaces.  We cap at 8 to guard against a
+     * misconfigured tab_width, though 4 is the default.
+     */
+    int  w = (ed->tab_width > 0 && ed->tab_width <= 8) ? ed->tab_width : 4;
+    char spaces[9];              /* max 8 spaces + null terminator */
+    for (int i = 0; i < w; i++) spaces[i] = ' ';
+    spaces[w] = '\0';
+
+    /*
+     * Insert the spaces using the same helper as paste.  This lets us record
+     * the whole tab as a SINGLE undo entry — one Ctrl+Z removes all spaces.
+     */
+    int start_row = ed->cursor_row;
+    int start_col = ed->cursor_col;
+    int end_row, end_col;
+
+    insert_text_at(buf, start_row, start_col, spaces, &end_row, &end_col);
+
+    /* Record as UNDO_PASTE with a copy of the spaces string */
+    UndoRecord rec;
+    memset(&rec, 0, sizeof(rec));
+    rec.type              = UNDO_PASTE;
+    rec.row               = start_row;
+    rec.col               = start_col;
+    rec.end_row           = end_row;
+    rec.end_col           = end_col;
+    rec.text              = strdup(spaces);  /* freed by undo_clear/undo_push */
+    rec.cursor_row_before = start_row;
+    rec.cursor_col_before = start_col;
+    rec.cursor_row_after  = end_row;
+    rec.cursor_col_after  = end_col;
+    undo_push(&buf->undo_stack, rec);
+    undo_clear(&buf->redo_stack);
+
+    /* Move cursor to end of inserted spaces */
+    ed->cursor_row  = end_row;
+    ed->cursor_col  = end_col;
+    ed->desired_col = ed->cursor_col;
+    editor_scroll(ed);
+}
+
 void editor_insert_newline(Editor *ed)
 {
     Buffer *buf = editor_current_buffer(ed);
     if (!buf) return;
 
     /*
+     * Auto-indent: capture the leading whitespace of the current line BEFORE
+     * we split it, so we can copy it onto the new line afterward.
+     *
+     * We copy into a fixed buffer rather than keeping a pointer into
+     * buf->lines, because buffer_insert_newline may realloc the lines array,
+     * which would invalidate any pointer we held into it.
+     */
+    Line *cur_line = &buf->lines[ed->cursor_row];
+    int indent = 0;
+    char indent_buf[256];   /* enough for any reasonable indentation */
+    while (indent < cur_line->len &&
+           indent < (int)(sizeof(indent_buf)) &&
+           (cur_line->text[indent] == ' ' || cur_line->text[indent] == '\t')) {
+        indent_buf[indent] = cur_line->text[indent];
+        indent++;
+    }
+
+    /*
      * Record the split point.  To undo, we call join_lines(row), which
      * joins line `row` with line `row+1` — exactly what Enter split apart.
+     * The cursor_col_after accounts for the indentation that will be inserted.
      */
     UndoRecord rec;
     rec.type              = UNDO_INSERT_NEWLINE;
@@ -638,7 +726,7 @@ void editor_insert_newline(Editor *ed)
     rec.cursor_row_before = ed->cursor_row;
     rec.cursor_col_before = ed->cursor_col;
     rec.cursor_row_after  = ed->cursor_row + 1;
-    rec.cursor_col_after  = 0;
+    rec.cursor_col_after  = indent;          /* cursor lands after the indent */
     undo_push(&buf->undo_stack, rec);
 
     undo_clear(&buf->redo_stack);
@@ -648,6 +736,24 @@ void editor_insert_newline(Editor *ed)
     ed->cursor_row++;
     ed->cursor_col  = 0;
     ed->desired_col = 0;
+
+    /*
+     * Insert the indentation characters into the new (empty) line.
+     * We insert them one at a time using buffer_insert_char, which keeps
+     * the buffer's internal state consistent.
+     *
+     * Note: we do NOT push individual undo records for each indent character —
+     * the single UNDO_INSERT_NEWLINE record above records the final cursor
+     * position (col = indent), so undoing the newline removes the whole line
+     * including its indentation prefix.
+     */
+    for (int i = 0; i < indent; i++) {
+        buffer_insert_char(buf, ed->cursor_row, ed->cursor_col,
+                           indent_buf[i]);
+        ed->cursor_col++;
+    }
+
+    ed->desired_col = ed->cursor_col;
     editor_scroll(ed);
 }
 
@@ -1481,6 +1587,21 @@ void editor_set_status(Editor *ed, const char *fmt, ...)
     va_end(ap);
 }
 
+/*
+ * line_screen_rows — how many screen rows a buffer line of `line_len`
+ * characters occupies when word-wrap is active and the text area is
+ * `text_cols` columns wide.
+ *
+ * An empty line still occupies one screen row (you have to be able to put
+ * the cursor somewhere on it).
+ */
+static int line_screen_rows(int line_len, int text_cols)
+{
+    if (text_cols <= 0) return 1;
+    if (line_len == 0) return 1;
+    return (line_len + text_cols - 1) / text_cols;
+}
+
 void editor_scroll(Editor *ed)
 {
     Buffer *buf = editor_current_buffer(ed);
@@ -1489,23 +1610,71 @@ void editor_scroll(Editor *ed)
     int rows = editor_rows(ed);
     int cols = editor_cols(ed);
 
-    /* Vertical scrolling */
-    if (ed->cursor_row < ed->view_row) {
-        ed->view_row = ed->cursor_row;
-    }
-    if (ed->cursor_row >= ed->view_row + rows) {
-        ed->view_row = ed->cursor_row - rows + 1;
+    if (ed->word_wrap) {
+        /*
+         * Word-wrap mode: horizontal scroll is irrelevant, view_col stays 0.
+         * Vertical scrolling must account for lines that span multiple screen
+         * rows.
+         *
+         * Strategy:
+         *   1. If cursor is above the viewport, snap view_row to cursor_row.
+         *   2. Count how many screen rows are needed from view_row to the
+         *      cursor's screen position.  If the cursor falls below the last
+         *      visible row, advance view_row one buffer line at a time until
+         *      the cursor fits.
+         */
+        ed->view_col = 0;
+
+        /* Step 1 — cursor above viewport */
+        if (ed->cursor_row < ed->view_row)
+            ed->view_row = ed->cursor_row;
+
+        /* Step 2 — cursor below viewport: scroll down until cursor is visible */
+        for (;;) {
+            /*
+             * Count screen rows from view_row up to and including the cursor's
+             * wrapped sub-row within cursor_row.
+             */
+            int screen_used = 0;
+            for (int r = ed->view_row; r <= ed->cursor_row; r++) {
+                int len = buffer_line_len(buf, r);
+                if (r == ed->cursor_row) {
+                    /* Only count up to (and including) the cursor's sub-row */
+                    screen_used += ed->cursor_col / cols + 1;
+                } else {
+                    screen_used += line_screen_rows(len, cols);
+                }
+            }
+
+            if (screen_used <= rows)
+                break;  /* cursor is visible — done */
+
+            /* Cursor is below the viewport; advance view_row by one line */
+            ed->view_row++;
+        }
+
+    } else {
+        /*
+         * Normal (no wrap) mode: standard viewport scrolling.
+         *
+         * Vertical: keep cursor_row within [view_row, view_row + rows).
+         * Horizontal: keep cursor_col within [view_col, view_col + cols).
+         */
+
+        /* Vertical */
+        if (ed->cursor_row < ed->view_row)
+            ed->view_row = ed->cursor_row;
+        if (ed->cursor_row >= ed->view_row + rows)
+            ed->view_row = ed->cursor_row - rows + 1;
+
+        /* Horizontal */
+        if (ed->cursor_col < ed->view_col)
+            ed->view_col = ed->cursor_col;
+        if (ed->cursor_col >= ed->view_col + cols)
+            ed->view_col = ed->cursor_col - cols + 1;
     }
 
-    /* Horizontal scrolling */
-    if (ed->cursor_col < ed->view_col) {
-        ed->view_col = ed->cursor_col;
-    }
-    if (ed->cursor_col >= ed->view_col + cols) {
-        ed->view_col = ed->cursor_col - cols + 1;
-    }
-
-    /* Clamp view_row so we don't scroll past the end of the file */
+    /* Clamp view_row so we never scroll past the end of the file */
     int max_view_row = buf->num_lines - 1;
     if (ed->view_row > max_view_row) ed->view_row = max_view_row;
     if (ed->view_row < 0)           ed->view_row = 0;

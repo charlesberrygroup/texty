@@ -202,6 +202,10 @@ void input_process_key(struct Editor *ed)
             editor_delete_char(ed);
             break;
 
+        case '\t':             /* Tab — insert spaces (width set by ed->tab_width) */
+            editor_insert_tab(ed);
+            break;
+
         case '\r':             /* Carriage return (some terminals) */
         case '\n':             /* Newline */
         case KEY_ENTER:        /* Numpad Enter */
@@ -214,6 +218,14 @@ void input_process_key(struct Editor *ed)
 
         case CTRL('f'):        /* Ctrl+F — Find */
             editor_find(ed);
+            break;
+
+        case KEY_F(2):         /* F2 — Toggle visible whitespace */
+            editor_toggle_whitespace(ed);
+            break;
+
+        case KEY_F(4):         /* F4 — Toggle word wrap */
+            editor_toggle_word_wrap(ed);
             break;
 
         case KEY_F(3):         /* F3 — Find next */

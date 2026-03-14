@@ -11,6 +11,10 @@ A terminal-based IDE written in C, built from scratch.
 - Copy, cut, and paste (Ctrl+C / Ctrl+X / Ctrl+V)
 - Multiple open buffers with a tab bar (Ctrl+N / Ctrl+O / Ctrl+W)
 - Search and replace (Ctrl+F / F3 / Shift+F3 / Ctrl+R)
+- Auto-indent on newline (matches current line's indentation)
+- Tab key inserts 4 spaces (single undo step)
+- Show/hide whitespace characters (F2)
+- Word wrap toggle (F4)
 - Arrow keys, Home/End, Page Up/Down, Ctrl+Home/End
 - Save with Ctrl+S, quit with Ctrl+Q
 - Line number gutter
@@ -55,9 +59,17 @@ Produces the `./texty` binary.
 |------------------|--------------------------------------|
 | Backspace        | Delete character before cursor       |
 | Delete           | Delete character at cursor           |
-| Enter            | Insert newline                       |
+| Enter            | Insert newline (auto-indents)        |
+| Tab              | Insert 4 spaces                      |
 | Ctrl+Z           | Undo                                 |
 | Ctrl+Y           | Redo                                 |
+
+### View
+
+| Key              | Action                               |
+|------------------|--------------------------------------|
+| F2               | Toggle whitespace characters         |
+| F4               | Toggle word wrap                     |
 
 ### Selection & clipboard
 

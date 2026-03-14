@@ -268,6 +268,45 @@ static int col_in_any_match(const char *line_text, int line_len,
 }
 
 /*
+ * draw_char_ws — output one character, substituting a visible marker for
+ * spaces when show_whitespace is enabled.
+ *
+ * We use ncurses' ACS_BULLET (a portable middle-dot glyph) for spaces.
+ * The caller is responsible for setting the correct attribute before calling
+ * this function; we only change the character, not the color or style.
+ */
+static void draw_char_ws(char c, int show_whitespace)
+{
+    if (show_whitespace && c == ' ') {
+        /*
+         * ACS_BULLET is a portable ncurses character for a small filled
+         * circle/dot.  It renders correctly on all terminal types that
+         * support the ACS (Alternate Character Set) line-drawing characters.
+         */
+        addch(ACS_BULLET);
+    } else {
+        /*
+         * Cast to unsigned char: characters > 127 would be sign-extended
+         * to a negative int without the cast, which ncurses may misinterpret.
+         */
+        addch((unsigned char)c);
+    }
+}
+
+/*
+ * draw_text_segment — output `len` characters from `text`, substituting
+ * spaces with the whitespace marker when show_whitespace is enabled.
+ *
+ * This replaces addnstr() calls in the non-search rendering path so that
+ * whitespace substitution works in all rendering modes uniformly.
+ */
+static void draw_text_segment(const char *text, int len, int show_whitespace)
+{
+    for (int i = 0; i < len; i++)
+        draw_char_ws(text[i], show_whitespace);
+}
+
+/*
  * draw_line_with_search — render one line of text character-by-character,
  * applying search-match, selection, and cursor-row highlights with the
  * correct priority:
@@ -329,13 +368,22 @@ static void draw_line_with_search(int buf_row,
         }
 
         attrset(attr);
-        /*
-         * Cast to unsigned char before passing to addch.  Without this,
-         * characters with codes > 127 (non-ASCII) would be sign-extended
-         * to a negative int, which ncurses might misinterpret.
-         */
-        addch((unsigned char)draw_start[i]);
+        draw_char_ws(draw_start[i], ed->show_whitespace);
     }
+}
+
+/*
+ * line_screen_rows_d — display-side copy of the same helper in editor.c.
+ *
+ * Returns the number of screen rows a line of `line_len` chars occupies
+ * when word-wrap is on and the text area is `text_cols` columns wide.
+ * (We duplicate it here so display.c stays independent of editor.c internals.)
+ */
+static int line_screen_rows_d(int line_len, int text_cols)
+{
+    if (text_cols <= 0) return 1;
+    if (line_len == 0)  return 1;
+    return (line_len + text_cols - 1) / text_cols;
 }
 
 static void draw_editor_area(struct Editor *ed)
@@ -374,118 +422,78 @@ static void draw_editor_area(struct Editor *ed)
         }
     }
 
-    for (int screen_row = 0; screen_row < text_rows; screen_row++) {
-        int buf_row = ed->view_row + screen_row;
+    /*
+     * text_cols — usable column width for text (terminal width minus gutter).
+     * Needed by both the normal and word-wrap rendering paths.
+     */
+    int text_cols = ed->term_cols - GUTTER_WIDTH;
 
-        /* Position at the start of this screen row (offset past the tab bar) */
-        move(TAB_BAR_HEIGHT + screen_row, 0);
-
-        if (buf_row >= buf->num_lines) {
-            /*
-             * Past end of file — draw a tilde in the gutter (like vim does)
-             * to indicate "no line here".  The move() above already placed us
-             * on the correct screen row (offset by TAB_BAR_HEIGHT).
-             */
-            attron(COLOR_PAIR(CPAIR_GUTTER));
-            printw("  ~  ");
-            attroff(COLOR_PAIR(CPAIR_GUTTER));
-            clrtoeol();
-            continue;
-        }
-
-        /* ---- Gutter: line number ---------------------------------------- */
-        int is_cursor_row = (buf_row == ed->cursor_row);
-
-        attron(COLOR_PAIR(CPAIR_GUTTER));
-        if (is_cursor_row) attron(A_BOLD);
-        printw("%4d ", buf_row + 1);
-        if (is_cursor_row) attroff(A_BOLD);
-        attroff(COLOR_PAIR(CPAIR_GUTTER));
-
-        /* ---- Compute what portion of this row (if any) is selected ------- */
-
+    if (ed->word_wrap) {
         /*
-         * row_sel_start and row_sel_end are column indices (in the buffer,
-         * not on screen) of the selected range on this row.
+         * ================================================================
+         * Word-wrap rendering path
+         * ================================================================
          *
-         * row_sel_start == row_sel_end means nothing is selected on this row.
+         * In word-wrap mode a single buffer line may occupy multiple screen
+         * rows.  We iterate screen rows, tracking (buf_row, segment) where
+         * `segment` is which chunk of the wrapped line we are drawing.
+         *
+         *   segment 0: columns [0             .. text_cols)
+         *   segment 1: columns [text_cols     .. 2*text_cols)
+         *   segment k: columns [k*text_cols   .. (k+1)*text_cols)
          */
-        int row_sel_start = 0, row_sel_end = 0;
+        int buf_row = ed->view_row;
+        int segment = 0;           /* which wrapped segment of buf_row */
 
-        if (sel_active && buf_row >= sel_sr && buf_row <= sel_er) {
-            int line_len = buffer_line_len(buf, buf_row);
+        for (int screen_row = 0; screen_row < text_rows; screen_row++) {
+            move(TAB_BAR_HEIGHT + screen_row, 0);
 
-            row_sel_start = (buf_row == sel_sr) ? sel_sc : 0;
+            if (buf_row >= buf->num_lines) {
+                /* Past end of file */
+                attron(COLOR_PAIR(CPAIR_GUTTER));
+                printw("  ~  ");
+                attroff(COLOR_PAIR(CPAIR_GUTTER));
+                clrtoeol();
+                continue;
+            }
 
-            if (buf_row == sel_er) {
-                row_sel_end = sel_ec;
+            int is_cursor_row = (buf_row == ed->cursor_row);
+            int row_attr      = is_cursor_row ? A_REVERSE : A_NORMAL;
+
+            /* ---- Gutter ---- */
+            attron(COLOR_PAIR(CPAIR_GUTTER));
+            if (segment == 0) {
+                /*
+                 * First segment of this line: show the line number.
+                 * Bold on the cursor row for emphasis.
+                 */
+                if (is_cursor_row) attron(A_BOLD);
+                printw("%4d ", buf_row + 1);
+                if (is_cursor_row) attroff(A_BOLD);
             } else {
                 /*
-                 * Middle rows of a multi-line selection: the entire line is
-                 * selected.  We extend the highlight one past the last char
-                 * so the selection visually covers the newline position too.
+                 * Continuation segment: leave gutter blank (no line number)
+                 * so the wrapped text looks like a continuation of the line.
                  */
-                row_sel_end = line_len + 1;
+                printw("     ");
             }
-        }
+            attroff(COLOR_PAIR(CPAIR_GUTTER));
 
-        /* ---- Set up the base attribute for unselected text on this row --- */
+            /* ---- Compute the visible slice of this segment ---- */
+            const char *line_text = buffer_get_line(buf, buf_row);
+            int         line_len  = buffer_line_len(buf, buf_row);
 
-        /*
-         * Cursor row uses A_REVERSE (reverse video) to highlight the line.
-         * Other rows use A_NORMAL (terminal defaults).
-         * Selected segments always use CPAIR_SELECTION regardless of row.
-         */
-        int row_attr = is_cursor_row ? A_REVERSE : A_NORMAL;
+            int start_col = segment * text_cols;
+            int draw_len  = line_len - start_col;
+            if (draw_len < 0)        draw_len = 0;
+            if (draw_len > text_cols) draw_len = text_cols;
 
-        /* ---- Compute what slice of the line is visible on screen --------- */
+            const char *draw_start = line_text + start_col;
 
-        const char *line_text = buffer_get_line(buf, buf_row);
-        int         line_len  = buffer_line_len(buf, buf_row);
-        int         text_cols = ed->term_cols - GUTTER_WIDTH;
-        int         view_col  = ed->view_col;
+            /* ---- Render ---- */
+            int search_active = (ed->search_query[0] != '\0');
 
-        /* Clamp view_col so we don't go past end of line */
-        int start_col = (view_col <= line_len) ? view_col : line_len;
-        int draw_len  = line_len - start_col;
-        if (draw_len > text_cols) draw_len = text_cols;
-
-        /*
-         * draw_start points to the first character that will be rendered.
-         * All column positions below are relative to the start of the line
-         * (buffer coordinates), so we subtract view_col to convert to screen
-         * coordinates within the text area.
-         */
-        const char *draw_start = line_text + start_col;
-
-        /* ---- Render the line in up to three segments --------------------- */
-
-        /*
-         * Convert the selection range from buffer coords to screen coords
-         * (relative to the start of the visible text area).
-         * Clamp to [0, draw_len] so we never draw outside the visible area.
-         */
-        int vis_sel_start = row_sel_start - view_col;
-        int vis_sel_end   = row_sel_end   - view_col;
-
-        if (vis_sel_start < 0)         vis_sel_start = 0;
-        if (vis_sel_end   < 0)         vis_sel_end   = 0;
-        if (vis_sel_start > draw_len)  vis_sel_start = draw_len;
-        if (vis_sel_end   > draw_len)  vis_sel_end   = draw_len;
-
-        int has_selection_on_row = sel_active
-                                   && (row_sel_start != row_sel_end)
-                                   && (vis_sel_start < vis_sel_end);
-
-        int search_active = (ed->search_query[0] != '\0');
-
-        if (search_active) {
-            /*
-             * Search mode: use the per-character renderer so we can apply
-             * search-match highlights on top of selection and row highlights.
-             * After rendering characters, fill the rest of the line normally.
-             */
-            if (draw_len > 0) {
+            if (search_active && draw_len > 0) {
                 draw_line_with_search(buf_row,
                                       line_text, line_len,
                                       draw_start, draw_len,
@@ -493,46 +501,238 @@ static void draw_editor_area(struct Editor *ed)
                                       sel_active,
                                       sel_sr, sel_sc, sel_er, sel_ec,
                                       ed);
-            }
-            attrset(row_attr);
-            clrtoeol();
-            attrset(A_NORMAL);
+                attrset(row_attr);
+                clrtoeol();
+                attrset(A_NORMAL);
+            } else {
+                /*
+                 * Compute selection range for this segment, clamped to
+                 * [start_col, start_col + draw_len].
+                 */
+                int row_sel_start = 0, row_sel_end = 0;
+                if (sel_active && buf_row >= sel_sr && buf_row <= sel_er) {
+                    row_sel_start = (buf_row == sel_sr) ? sel_sc : 0;
+                    row_sel_end   = (buf_row == sel_er) ? sel_ec : line_len + 1;
+                }
 
-        } else if (!has_selection_on_row) {
-            /* No search, no selection — render the whole line with row_attr */
-            attrset(row_attr);
-            if (draw_len > 0)
-                addnstr(draw_start, draw_len);
-            clrtoeol();
-            attrset(A_NORMAL);
-        } else {
+                /* Convert to coords relative to this segment */
+                int vis_sel_start = row_sel_start - start_col;
+                int vis_sel_end   = row_sel_end   - start_col;
+                if (vis_sel_start < 0)        vis_sel_start = 0;
+                if (vis_sel_end   < 0)        vis_sel_end   = 0;
+                if (vis_sel_start > draw_len) vis_sel_start = draw_len;
+                if (vis_sel_end   > draw_len) vis_sel_end   = draw_len;
+
+                int has_sel = sel_active
+                              && (row_sel_start != row_sel_end)
+                              && (vis_sel_start < vis_sel_end);
+
+                if (!has_sel) {
+                    attrset(row_attr);
+                    if (draw_len > 0)
+                        draw_text_segment(draw_start, draw_len,
+                                          ed->show_whitespace);
+                    clrtoeol();
+                    attrset(A_NORMAL);
+                } else {
+                    if (vis_sel_start > 0) {
+                        attrset(row_attr);
+                        draw_text_segment(draw_start, vis_sel_start,
+                                          ed->show_whitespace);
+                    }
+                    attrset(A_NORMAL);
+                    attron(COLOR_PAIR(CPAIR_SELECTION));
+                    draw_text_segment(draw_start + vis_sel_start,
+                                      vis_sel_end - vis_sel_start,
+                                      ed->show_whitespace);
+                    attroff(COLOR_PAIR(CPAIR_SELECTION));
+                    if (vis_sel_end < draw_len) {
+                        attrset(row_attr);
+                        draw_text_segment(draw_start + vis_sel_end,
+                                          draw_len - vis_sel_end,
+                                          ed->show_whitespace);
+                    }
+                    attrset(row_attr);
+                    clrtoeol();
+                    attrset(A_NORMAL);
+                }
+            }
+
+            /* ---- Advance (buf_row, segment) ---- */
+            segment++;
+            if (start_col + text_cols >= line_len) {
+                /* We have rendered the last (or only) segment of this line */
+                buf_row++;
+                segment = 0;
+            }
+        }
+
+    } else {
+        /*
+         * ================================================================
+         * Normal (no wrap) rendering path — original logic
+         * ================================================================
+         */
+        for (int screen_row = 0; screen_row < text_rows; screen_row++) {
+            int buf_row = ed->view_row + screen_row;
+
+            /* Position at the start of this screen row (offset past the tab bar) */
+            move(TAB_BAR_HEIGHT + screen_row, 0);
+
+            if (buf_row >= buf->num_lines) {
+                /*
+                 * Past end of file — draw a tilde in the gutter (like vim does)
+                 * to indicate "no line here".
+                 */
+                attron(COLOR_PAIR(CPAIR_GUTTER));
+                printw("  ~  ");
+                attroff(COLOR_PAIR(CPAIR_GUTTER));
+                clrtoeol();
+                continue;
+            }
+
+            /* ---- Gutter: line number ---------------------------------------- */
+            int is_cursor_row = (buf_row == ed->cursor_row);
+
+            attron(COLOR_PAIR(CPAIR_GUTTER));
+            if (is_cursor_row) attron(A_BOLD);
+            printw("%4d ", buf_row + 1);
+            if (is_cursor_row) attroff(A_BOLD);
+            attroff(COLOR_PAIR(CPAIR_GUTTER));
+
+            /* ---- Compute what portion of this row (if any) is selected ------- */
+
             /*
-             * No search but selection present: split into up to three segments.
+             * row_sel_start and row_sel_end are column indices (in the buffer,
+             * not on screen) of the selected range on this row.
              *
-             *   [0 .. vis_sel_start)          row_attr
-             *   [vis_sel_start .. vis_sel_end) CPAIR_SELECTION
-             *   [vis_sel_end .. draw_len)      row_attr
+             * row_sel_start == row_sel_end means nothing is selected on this row.
              */
+            int row_sel_start = 0, row_sel_end = 0;
 
-            if (vis_sel_start > 0) {
-                attrset(row_attr);
-                addnstr(draw_start, vis_sel_start);
+            if (sel_active && buf_row >= sel_sr && buf_row <= sel_er) {
+                int line_len = buffer_line_len(buf, buf_row);
+
+                row_sel_start = (buf_row == sel_sr) ? sel_sc : 0;
+
+                if (buf_row == sel_er) {
+                    row_sel_end = sel_ec;
+                } else {
+                    /*
+                     * Middle rows of a multi-line selection: the entire line is
+                     * selected.  We extend the highlight one past the last char
+                     * so the selection visually covers the newline position too.
+                     */
+                    row_sel_end = line_len + 1;
+                }
             }
 
-            attrset(A_NORMAL);
-            attron(COLOR_PAIR(CPAIR_SELECTION));
-            if (vis_sel_end > vis_sel_start)
-                addnstr(draw_start + vis_sel_start, vis_sel_end - vis_sel_start);
-            attroff(COLOR_PAIR(CPAIR_SELECTION));
+            /* ---- Set up the base attribute for unselected text on this row --- */
 
-            if (vis_sel_end < draw_len) {
+            /*
+             * Cursor row uses A_REVERSE (reverse video) to highlight the line.
+             * Other rows use A_NORMAL (terminal defaults).
+             * Selected segments always use CPAIR_SELECTION regardless of row.
+             */
+            int row_attr = is_cursor_row ? A_REVERSE : A_NORMAL;
+
+            /* ---- Compute what slice of the line is visible on screen --------- */
+
+            const char *line_text = buffer_get_line(buf, buf_row);
+            int         line_len  = buffer_line_len(buf, buf_row);
+            int         view_col  = ed->view_col;
+
+            /* Clamp view_col so we don't go past end of line */
+            int start_col = (view_col <= line_len) ? view_col : line_len;
+            int draw_len  = line_len - start_col;
+            if (draw_len > text_cols) draw_len = text_cols;
+
+            /*
+             * draw_start points to the first character that will be rendered.
+             */
+            const char *draw_start = line_text + start_col;
+
+            /* ---- Render the line in up to three segments --------------------- */
+
+            /*
+             * Convert the selection range from buffer coords to screen coords
+             * (relative to the start of the visible text area).
+             * Clamp to [0, draw_len] so we never draw outside the visible area.
+             */
+            int vis_sel_start = row_sel_start - view_col;
+            int vis_sel_end   = row_sel_end   - view_col;
+
+            if (vis_sel_start < 0)         vis_sel_start = 0;
+            if (vis_sel_end   < 0)         vis_sel_end   = 0;
+            if (vis_sel_start > draw_len)  vis_sel_start = draw_len;
+            if (vis_sel_end   > draw_len)  vis_sel_end   = draw_len;
+
+            int has_selection_on_row = sel_active
+                                       && (row_sel_start != row_sel_end)
+                                       && (vis_sel_start < vis_sel_end);
+
+            int search_active = (ed->search_query[0] != '\0');
+
+            if (search_active) {
+                /*
+                 * Search mode: use the per-character renderer so we can apply
+                 * search-match highlights on top of selection and row highlights.
+                 * After rendering characters, fill the rest of the line normally.
+                 */
+                if (draw_len > 0) {
+                    draw_line_with_search(buf_row,
+                                          line_text, line_len,
+                                          draw_start, draw_len,
+                                          start_col, row_attr,
+                                          sel_active,
+                                          sel_sr, sel_sc, sel_er, sel_ec,
+                                          ed);
+                }
                 attrset(row_attr);
-                addnstr(draw_start + vis_sel_end, draw_len - vis_sel_end);
-            }
+                clrtoeol();
+                attrset(A_NORMAL);
 
-            attrset(row_attr);
-            clrtoeol();
-            attrset(A_NORMAL);
+            } else if (!has_selection_on_row) {
+                /* No search, no selection — render the whole line with row_attr */
+                attrset(row_attr);
+                if (draw_len > 0)
+                    draw_text_segment(draw_start, draw_len, ed->show_whitespace);
+                clrtoeol();
+                attrset(A_NORMAL);
+            } else {
+                /*
+                 * No search but selection present: split into up to three segments.
+                 *
+                 *   [0 .. vis_sel_start)          row_attr
+                 *   [vis_sel_start .. vis_sel_end) CPAIR_SELECTION
+                 *   [vis_sel_end .. draw_len)      row_attr
+                 */
+
+                if (vis_sel_start > 0) {
+                    attrset(row_attr);
+                    draw_text_segment(draw_start, vis_sel_start,
+                                      ed->show_whitespace);
+                }
+
+                attrset(A_NORMAL);
+                attron(COLOR_PAIR(CPAIR_SELECTION));
+                if (vis_sel_end > vis_sel_start)
+                    draw_text_segment(draw_start + vis_sel_start,
+                                      vis_sel_end - vis_sel_start,
+                                      ed->show_whitespace);
+                attroff(COLOR_PAIR(CPAIR_SELECTION));
+
+                if (vis_sel_end < draw_len) {
+                    attrset(row_attr);
+                    draw_text_segment(draw_start + vis_sel_end,
+                                      draw_len - vis_sel_end,
+                                      ed->show_whitespace);
+                }
+
+                attrset(row_attr);
+                clrtoeol();
+                attrset(A_NORMAL);
+            }
         }
     }
 }
@@ -618,12 +818,38 @@ void display_render(struct Editor *ed)
     /*
      * Position the terminal cursor at the editor cursor position.
      *
-     * Screen column = GUTTER_WIDTH + (cursor_col - view_col)
-     * Screen row    = TAB_BAR_HEIGHT + (cursor_row - view_row)
-     *                 ^--- tab bar occupies the top row
+     * In normal mode:
+     *   screen_col = GUTTER_WIDTH + (cursor_col - view_col)
+     *   screen_row = TAB_BAR_HEIGHT + (cursor_row - view_row)
+     *
+     * In word-wrap mode, each buffer line can span multiple screen rows,
+     * so we must count the actual screen rows consumed by all lines between
+     * view_row and cursor_row, then add the cursor's sub-row within its line.
      */
-    int screen_col = GUTTER_WIDTH + (ed->cursor_col - ed->view_col);
-    int screen_row = TAB_BAR_HEIGHT + (ed->cursor_row - ed->view_row);
+    int screen_col, screen_row;
+
+    if (ed->word_wrap) {
+        int text_cols_wr = ed->term_cols - GUTTER_WIDTH;
+        if (text_cols_wr <= 0) text_cols_wr = 1;
+
+        /* Count screen rows from view_row up to (but not including) cursor_row */
+        int sr = 0;
+        Buffer *buf_wr = editor_current_buffer(ed);
+        if (buf_wr) {
+            for (int r = ed->view_row; r < ed->cursor_row; r++) {
+                int len = buffer_line_len(buf_wr, r);
+                sr += line_screen_rows_d(len, text_cols_wr);
+            }
+        }
+        /* Add the sub-row within cursor_row */
+        sr += ed->cursor_col / text_cols_wr;
+
+        screen_row = TAB_BAR_HEIGHT + sr;
+        screen_col = GUTTER_WIDTH  + (ed->cursor_col % text_cols_wr);
+    } else {
+        screen_col = GUTTER_WIDTH + (ed->cursor_col - ed->view_col);
+        screen_row = TAB_BAR_HEIGHT + (ed->cursor_row - ed->view_row);
+    }
 
     /* Clamp to prevent moving outside the text area */
     int text_area_top    = TAB_BAR_HEIGHT;
