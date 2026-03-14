@@ -72,6 +72,14 @@ struct Editor;
 #define CPAIR_SEARCH_CUR  10   /* The currently highlighted search match */
 #define CPAIR_BRACKET     11   /* Matching bracket pair highlight        */
 
+/* ---- Syntax-highlighting color pairs (used by display.c + syntax.c) ------- */
+#define CPAIR_SYN_KEYWORD 12   /* Language keywords: if, for, return...  */
+#define CPAIR_SYN_TYPE    13   /* Built-in types: int, void, bool...     */
+#define CPAIR_SYN_STRING  14   /* String / character literals            */
+#define CPAIR_SYN_COMMENT 15   /* Comments (line or block)               */
+#define CPAIR_SYN_PREPROC 16   /* Preprocessor directives: #include...   */
+#define CPAIR_SYN_NUMBER  17   /* Numeric literals: 42, 0xFF, 3.14       */
+
 /* ---- Functions ------------------------------------------------------------ */
 
 /**

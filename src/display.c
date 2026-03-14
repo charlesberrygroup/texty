@@ -12,6 +12,7 @@
 #include "display.h"
 #include "editor.h"
 #include "buffer.h"
+#include "syntax.h"
 
 #include <ncurses.h>
 #include <string.h>
@@ -113,6 +114,27 @@ void display_init(void)
          * and selection (cyan), and stands out on both light and dark terminals.
          */
         init_pair(CPAIR_BRACKET,      COLOR_WHITE,   COLOR_MAGENTA);
+
+        /*
+         * Syntax-highlighting color pairs.
+         * These use -1 (terminal default) as the background so syntax colors
+         * blend naturally with whatever background color the user has set.
+         *
+         * Color choices were made to be readable on both dark and light
+         * terminal backgrounds and to not clash with existing UI colors:
+         *   KEYWORD  — bold yellow  (stands out, commonly used for keywords)
+         *   TYPE     — cyan         (already used for gutter; distinct enough)
+         *   STRING   — green        (universal convention for string literals)
+         *   COMMENT  — blue         (reads as "less important" than code)
+         *   PREPROC  — magenta      (already used for brackets; good contrast)
+         *   NUMBER   — red          (numerics in red is a common convention)
+         */
+        init_pair(CPAIR_SYN_KEYWORD,  COLOR_YELLOW,  -1);
+        init_pair(CPAIR_SYN_TYPE,     COLOR_CYAN,    -1);
+        init_pair(CPAIR_SYN_STRING,   COLOR_GREEN,   -1);
+        init_pair(CPAIR_SYN_COMMENT,  COLOR_BLUE,    -1);
+        init_pair(CPAIR_SYN_PREPROC,  COLOR_MAGENTA, -1);
+        init_pair(CPAIR_SYN_NUMBER,   COLOR_RED,     -1);
     }
 }
 
@@ -314,15 +336,42 @@ static void draw_text_segment(const char *text, int len, int show_whitespace)
 }
 
 /*
+ * syntax_token_attr — map a SyntaxToken value to an ncurses attribute.
+ *
+ * Returns A_NORMAL when `tokens` is NULL (no language detected) or when the
+ * token type is SYN_NORMAL (plain text).  The caller should pass `buf_col`
+ * as the index into the tokens array for the character being rendered.
+ *
+ * Keywords get A_BOLD to make them visually heavier without needing a
+ * separate foreground color.  All other token types use color only.
+ */
+static int syntax_token_attr(const SyntaxToken *tokens, int col)
+{
+    if (tokens == NULL) return A_NORMAL;
+    switch (tokens[col]) {
+        case SYN_KEYWORD: return COLOR_PAIR(CPAIR_SYN_KEYWORD) | A_BOLD;
+        case SYN_TYPE:    return COLOR_PAIR(CPAIR_SYN_TYPE);
+        case SYN_STRING:  return COLOR_PAIR(CPAIR_SYN_STRING);
+        case SYN_COMMENT: return COLOR_PAIR(CPAIR_SYN_COMMENT);
+        case SYN_PREPROC: return COLOR_PAIR(CPAIR_SYN_PREPROC);
+        case SYN_NUMBER:  return COLOR_PAIR(CPAIR_SYN_NUMBER);
+        default:          return A_NORMAL;
+    }
+}
+
+/*
  * draw_line_with_search — render one line character-by-character, applying
  * highlights in priority order (highest first):
  *
  *   bracket match  >  current search match  >  other search matches
- *   >  selection  >  cursor-row reverse-video  >  normal
+ *   >  selection  >  cursor-row reverse-video  >  syntax color  >  normal
  *
  * bm_row / bm_col  — position of the matching bracket (-1 if none).
  *   The cursor bracket itself is at (ed->cursor_row, ed->cursor_col).
  *   Both positions get CPAIR_BRACKET when bracket matching is active.
+ *
+ * tokens — per-character SyntaxToken array from syntax_highlight_line(),
+ *   or NULL when no syntax language is detected for this file.
  */
 static void draw_line_with_search(int buf_row,
                                    const char *line_text, int line_len,
@@ -332,6 +381,7 @@ static void draw_line_with_search(int buf_row,
                                    int sel_sr, int sel_sc,
                                    int sel_er, int sel_ec,
                                    int bm_row,  int bm_col,
+                                   const SyntaxToken *tokens,
                                    struct Editor *ed)
 {
     const char *query      = ed->search_query;
@@ -373,8 +423,22 @@ static void draw_line_with_search(int buf_row,
                                      buf_row, buf_col)) {
             attr = COLOR_PAIR(CPAIR_SELECTION);
 
-        } else {
+        } else if (row_attr != A_NORMAL) {
+            /*
+             * Cursor row — use reverse video for the whole line.
+             * A_REVERSE swaps the terminal's foreground/background colors,
+             * which would make syntax colors invisible anyway, so we skip
+             * syntax highlighting on the cursor row.
+             */
             attr = row_attr;
+
+        } else {
+            /*
+             * Normal text — apply syntax color.
+             * syntax_token_attr() returns A_NORMAL for SYN_NORMAL characters
+             * and when tokens is NULL, so plain text is unaffected.
+             */
+            attr = syntax_token_attr(tokens, buf_col);
         }
 
         attrset(attr);
@@ -448,6 +512,38 @@ static void draw_editor_area(struct Editor *ed)
     int bm_row = -1, bm_col = -1;
     editor_find_bracket_match(ed, &bm_row, &bm_col);
 
+    /* ---- Syntax highlighting setup --------------------------------------- */
+
+    /*
+     * Detect which language this file is written in, based on its filename
+     * extension.  LANG_NONE means "no highlighting" — syntax_highlight_line()
+     * will simply set all tokens to SYN_NORMAL when called with LANG_NONE.
+     */
+    SyntaxLang syn_lang = syntax_detect_language(buf->filename);
+
+    /*
+     * Multi-line state: some constructs (C block comments, Python triple-
+     * quoted strings) can span multiple source lines.  We need to know the
+     * parse state at the TOP of the viewport, not just at line 0.
+     *
+     * We compute it by scanning every line from 0 up to view_row, carrying
+     * the state forward.  For most files this is very fast (microseconds),
+     * because we are just scanning characters — no memory allocation.
+     *
+     * A temporary tokens array is required by the API but its contents are
+     * discarded here; we only care about the returned state integer.
+     */
+    int syn_ml_state = 0;
+    if (syn_lang != LANG_NONE) {
+        SyntaxToken syn_tmp[SYNTAX_MAX_LINE];
+        for (int r = 0; r < ed->view_row && r < buf->num_lines; r++) {
+            syn_ml_state = syntax_highlight_line(syn_lang,
+                                                  buffer_get_line(buf, r),
+                                                  buffer_line_len(buf, r),
+                                                  syn_tmp, syn_ml_state);
+        }
+    }
+
     if (ed->word_wrap) {
         /*
          * ================================================================
@@ -465,16 +561,44 @@ static void draw_editor_area(struct Editor *ed)
         int buf_row = ed->view_row;
         int segment = 0;           /* which wrapped segment of buf_row */
 
+        /*
+         * syn_line_tokens — token array for the current buffer line.
+         * Declared outside the loop so it persists across screen rows that
+         * belong to the same (wrapped) buffer line.
+         *
+         * syn_tokens — pointer into syn_line_tokens, or NULL when no
+         * language is detected.  Passed directly to draw_line_with_search().
+         */
+        SyntaxToken syn_line_tokens[SYNTAX_MAX_LINE];
+        const SyntaxToken *syn_tokens = NULL;
+
         for (int screen_row = 0; screen_row < text_rows; screen_row++) {
             move(TAB_BAR_HEIGHT + screen_row, 0);
 
             if (buf_row >= buf->num_lines) {
                 /* Past end of file */
+                syn_tokens = NULL;
                 attron(COLOR_PAIR(CPAIR_GUTTER));
                 printw("  ~  ");
                 attroff(COLOR_PAIR(CPAIR_GUTTER));
                 clrtoeol();
                 continue;
+            }
+
+            /*
+             * Tokenize at the start of each new buffer line (segment == 0).
+             * Continuation segments (segment > 0) reuse the same token array
+             * since they show characters from the same buffer line.
+             */
+            if (segment == 0 && syn_lang != LANG_NONE) {
+                syn_ml_state = syntax_highlight_line(syn_lang,
+                                                      buffer_get_line(buf, buf_row),
+                                                      buffer_line_len(buf, buf_row),
+                                                      syn_line_tokens,
+                                                      syn_ml_state);
+                syn_tokens = syn_line_tokens;
+            } else if (segment == 0) {
+                syn_tokens = NULL;
             }
 
             int is_cursor_row = (buf_row == ed->cursor_row);
@@ -512,10 +636,15 @@ static void draw_editor_area(struct Editor *ed)
 
             /* ---- Render ---- */
             int search_active = (ed->search_query[0] != '\0');
-            /* Use per-character rendering when search or bracket match is active */
+            /*
+             * Use per-character rendering when any per-character attribute
+             * is active: search highlights, bracket match, or syntax colors.
+             * The fast segment-based path is only used for plain unstyled text.
+             */
             int need_perchar  = search_active
                                 || (bm_col >= 0 && buf_row == bm_row)
-                                || (bm_col >= 0 && buf_row == ed->cursor_row);
+                                || (bm_col >= 0 && buf_row == ed->cursor_row)
+                                || (syn_tokens != NULL);
 
             if (need_perchar && draw_len > 0) {
                 draw_line_with_search(buf_row,
@@ -525,6 +654,7 @@ static void draw_editor_area(struct Editor *ed)
                                       sel_active,
                                       sel_sr, sel_sc, sel_er, sel_ec,
                                       bm_row, bm_col,
+                                      syn_tokens,
                                       ed);
                 attrset(row_attr);
                 clrtoeol();
@@ -598,6 +728,15 @@ static void draw_editor_area(struct Editor *ed)
          * Normal (no wrap) rendering path — original logic
          * ================================================================
          */
+
+        /*
+         * syn_line_tokens — reused each iteration to hold per-character
+         * token types for the current line.  Declared outside the loop so
+         * the same 1 KB stack space is reused, not freshly allocated each
+         * iteration.
+         */
+        SyntaxToken syn_line_tokens[SYNTAX_MAX_LINE];
+
         for (int screen_row = 0; screen_row < text_rows; screen_row++) {
             int buf_row = ed->view_row + screen_row;
 
@@ -614,6 +753,22 @@ static void draw_editor_area(struct Editor *ed)
                 attroff(COLOR_PAIR(CPAIR_GUTTER));
                 clrtoeol();
                 continue;
+            }
+
+            /*
+             * Tokenize this line for syntax highlighting.
+             * syn_ml_state carries the multi-line parse state (e.g. "inside
+             * a block comment") from the previous line into this one.
+             * We update it in-place so it flows correctly down the screen.
+             */
+            const SyntaxToken *syn_tokens = NULL;
+            if (syn_lang != LANG_NONE) {
+                syn_ml_state = syntax_highlight_line(syn_lang,
+                                                      buffer_get_line(buf, buf_row),
+                                                      buffer_line_len(buf, buf_row),
+                                                      syn_line_tokens,
+                                                      syn_ml_state);
+                syn_tokens = syn_line_tokens;
             }
 
             /* ---- Gutter: line number ---------------------------------------- */
@@ -699,12 +854,14 @@ static void draw_editor_area(struct Editor *ed)
             int search_active2 = (ed->search_query[0] != '\0');
             int need_perchar2  = search_active2
                                  || (bm_col >= 0 && buf_row == bm_row)
-                                 || (bm_col >= 0 && buf_row == ed->cursor_row);
+                                 || (bm_col >= 0 && buf_row == ed->cursor_row)
+                                 || (syn_tokens != NULL);
 
             if (need_perchar2) {
                 /*
-                 * Per-character rendering: used when search or bracket match
-                 * is active so individual characters can be highlighted.
+                 * Per-character rendering: used when search, bracket match,
+                 * or syntax highlighting is active so individual characters
+                 * can receive different colors.
                  */
                 if (draw_len > 0) {
                     draw_line_with_search(buf_row,
@@ -714,6 +871,7 @@ static void draw_editor_area(struct Editor *ed)
                                           sel_active,
                                           sel_sr, sel_sc, sel_er, sel_ec,
                                           bm_row, bm_col,
+                                          syn_tokens,
                                           ed);
                 }
                 attrset(row_attr);
