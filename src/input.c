@@ -216,6 +216,10 @@ void input_process_key(struct Editor *ed)
          * Search & Replace
          * ------------------------------------------------------------------ */
 
+        case CTRL('g'):        /* Ctrl+G — Go to line */
+            editor_goto_line(ed);
+            break;
+
         case CTRL('f'):        /* Ctrl+F — Find */
             editor_find(ed);
             break;
@@ -329,6 +333,43 @@ void input_process_key(struct Editor *ed)
             break;
 
         /* ------------------------------------------------------------------ *
+         * Auto-close brackets and quotes
+         *
+         * When the user types an opening bracket or quote, automatically
+         * insert the matching closing character and leave the cursor between
+         * the pair.  For example, '(' inserts "()" with the cursor at the
+         * position between them.
+         *
+         * The pair is recorded as a single undo entry, so Ctrl+Z removes
+         * both characters at once.
+         * ------------------------------------------------------------------ */
+
+        case '(':
+            editor_insert_pair(ed, '(', ')');
+            ed->status_msg[0] = '\0';
+            break;
+
+        case '[':
+            editor_insert_pair(ed, '[', ']');
+            ed->status_msg[0] = '\0';
+            break;
+
+        case '{':
+            editor_insert_pair(ed, '{', '}');
+            ed->status_msg[0] = '\0';
+            break;
+
+        case '"':
+            editor_insert_pair(ed, '"', '"');
+            ed->status_msg[0] = '\0';
+            break;
+
+        case '\'':
+            editor_insert_pair(ed, '\'', '\'');
+            ed->status_msg[0] = '\0';
+            break;
+
+        /* ------------------------------------------------------------------ *
          * Default: printable characters
          * ------------------------------------------------------------------ */
 
@@ -338,8 +379,7 @@ void input_process_key(struct Editor *ed)
              * i.e. 0x20 through 0x7e), insert it into the buffer.
              *
              * We intentionally ignore:
-             *   - Tab (0x09) — to be handled in Phase 2 with configurable
-             *     tab width / expand-tabs setting.
+             *   - Tab (0x09) — handled above by editor_insert_tab.
              *   - Other control characters (< 0x20) that we do not yet map.
              *   - KEY_* constants (> 255) that we do not yet handle.
              */

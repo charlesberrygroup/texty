@@ -241,6 +241,40 @@ void editor_move_file_end(Editor *ed);
 void editor_insert_char(Editor *ed, char c);
 
 /**
+ * editor_insert_pair — insert an opening character and its closing pair,
+ * then place the cursor between them.
+ *
+ * Used for auto-close brackets and quotes.  For example, typing '(' calls
+ * editor_insert_pair(ed, '(', ')'), which inserts "()" and leaves the cursor
+ * at the position between them so the user can type the contents immediately.
+ *
+ * The entire pair is recorded as a single UNDO_PASTE entry, so one Ctrl+Z
+ * removes both characters at once.
+ */
+void editor_insert_pair(Editor *ed, char open, char close);
+
+/**
+ * editor_find_bracket_match — find the bracket that matches the one under
+ * the cursor.
+ *
+ * If the cursor is on '(', ')', '[', ']', '{', or '}', scans the buffer
+ * to find its pair (handling nesting) and writes the result to *out_row
+ * and *out_col.
+ *
+ * Returns 1 if a match was found, 0 if the cursor is not on a bracket or
+ * no matching bracket exists in the buffer.
+ */
+int editor_find_bracket_match(const Editor *ed, int *out_row, int *out_col);
+
+/**
+ * editor_goto_line — prompt for a line number and jump to it (Ctrl+G).
+ *
+ * Line numbers are 1-based (matching what the status bar shows).
+ * Out-of-range numbers are clamped to the first or last line.
+ */
+void editor_goto_line(Editor *ed);
+
+/**
  * editor_toggle_word_wrap — toggle word-wrap mode (F4).
  *
  * When on, lines wider than the terminal are wrapped visually.

@@ -13,6 +13,9 @@ A terminal-based IDE written in C, built from scratch.
 - Search and replace (Ctrl+F / F3 / Shift+F3 / Ctrl+R)
 - Auto-indent on newline (matches current line's indentation)
 - Tab key inserts 4 spaces (single undo step)
+- Auto-close brackets and quotes — `(`, `[`, `{`, `"`, `'` insert the matching closing character
+- Jump to line (Ctrl+G)
+- Bracket match highlight — matching bracket shown in magenta
 - Show/hide whitespace characters (F2)
 - Word wrap toggle (F4)
 - Arrow keys, Home/End, Page Up/Down, Ctrl+Home/End
@@ -61,6 +64,9 @@ Produces the `./texty` binary.
 | Delete           | Delete character at cursor           |
 | Enter            | Insert newline (auto-indents)        |
 | Tab              | Insert 4 spaces                      |
+| `(` `[` `{`      | Auto-insert closing bracket          |
+| `"` `'`          | Auto-insert closing quote            |
+| Ctrl+G           | Jump to line number (prompts)        |
 | Ctrl+Z           | Undo                                 |
 | Ctrl+Y           | Redo                                 |
 

@@ -106,6 +106,13 @@ void display_init(void)
          */
         init_pair(CPAIR_SEARCH_MATCH, COLOR_BLACK,   COLOR_YELLOW);
         init_pair(CPAIR_SEARCH_CUR,   COLOR_BLACK,   COLOR_GREEN);
+
+        /*
+         * CPAIR_BRACKET — matching bracket pair highlight.
+         * White text on magenta is visually distinct from search (yellow/green)
+         * and selection (cyan), and stands out on both light and dark terminals.
+         */
+        init_pair(CPAIR_BRACKET,      COLOR_WHITE,   COLOR_MAGENTA);
     }
 }
 
@@ -307,21 +314,15 @@ static void draw_text_segment(const char *text, int len, int show_whitespace)
 }
 
 /*
- * draw_line_with_search — render one line of text character-by-character,
- * applying search-match, selection, and cursor-row highlights with the
- * correct priority:
+ * draw_line_with_search — render one line character-by-character, applying
+ * highlights in priority order (highest first):
  *
- *   current match  >  any other match  >  selection  >  row highlight
+ *   bracket match  >  current search match  >  other search matches
+ *   >  selection  >  cursor-row reverse-video  >  normal
  *
- * Parameters
- * ----------
- *   buf_row     Buffer row being rendered (used for selection checks).
- *   draw_start  Pointer to the first visible character.
- *   draw_len    Number of characters to draw.
- *   view_col    First visible buffer column (for coordinate conversion).
- *   row_attr    Base attribute for this row (A_REVERSE or A_NORMAL).
- *   sel_*       Normalized selection bounds (pass sel_active=0 to disable).
- *   ed          The editor (for search_query, search_match_row/col).
+ * bm_row / bm_col  — position of the matching bracket (-1 if none).
+ *   The cursor bracket itself is at (ed->cursor_row, ed->cursor_col).
+ *   Both positions get CPAIR_BRACKET when bracket matching is active.
  */
 static void draw_line_with_search(int buf_row,
                                    const char *line_text, int line_len,
@@ -330,6 +331,7 @@ static void draw_line_with_search(int buf_row,
                                    int sel_active,
                                    int sel_sr, int sel_sc,
                                    int sel_er, int sel_ec,
+                                   int bm_row,  int bm_col,
                                    struct Editor *ed)
 {
     const char *query      = ed->search_query;
@@ -342,19 +344,27 @@ static void draw_line_with_search(int buf_row,
 
         int attr;
 
-        if (match_row == buf_row
+        if ((buf_row == ed->cursor_row && buf_col == ed->cursor_col
+                && buffer_line_len(editor_current_buffer(ed), buf_row) > buf_col
+                && bm_col >= 0)
+            || (buf_row == bm_row && buf_col == bm_col)) {
+            /*
+             * This character is one of the two matched brackets.
+             * Highest priority — shown in magenta regardless of search/selection.
+             */
+            attr = COLOR_PAIR(CPAIR_BRACKET) | A_BOLD;
+
+        } else if (match_row == buf_row
                 && buf_col >= match_col
                 && buf_col < match_col + qlen) {
             /*
-             * This character is part of the CURRENT (jumped-to) match.
-             * Show it with the green highlight.
+             * Current (jumped-to) search match — green.
              */
             attr = COLOR_PAIR(CPAIR_SEARCH_CUR) | A_BOLD;
 
         } else if (col_in_any_match(line_text, line_len, buf_col, query, qlen)) {
             /*
-             * This character is part of some other match of the query.
-             * Show it with the yellow highlight.
+             * Any other search match — yellow.
              */
             attr = COLOR_PAIR(CPAIR_SEARCH_MATCH);
 
@@ -428,6 +438,16 @@ static void draw_editor_area(struct Editor *ed)
      */
     int text_cols = ed->term_cols - GUTTER_WIDTH;
 
+    /*
+     * Bracket match — find the bracket that pairs with the one under the
+     * cursor (if any).  We compute this once here so the render loop can
+     * highlight both brackets without re-scanning the buffer per line.
+     *
+     * bm_row / bm_col are set to -1 when there is no active bracket match.
+     */
+    int bm_row = -1, bm_col = -1;
+    editor_find_bracket_match(ed, &bm_row, &bm_col);
+
     if (ed->word_wrap) {
         /*
          * ================================================================
@@ -492,14 +512,19 @@ static void draw_editor_area(struct Editor *ed)
 
             /* ---- Render ---- */
             int search_active = (ed->search_query[0] != '\0');
+            /* Use per-character rendering when search or bracket match is active */
+            int need_perchar  = search_active
+                                || (bm_col >= 0 && buf_row == bm_row)
+                                || (bm_col >= 0 && buf_row == ed->cursor_row);
 
-            if (search_active && draw_len > 0) {
+            if (need_perchar && draw_len > 0) {
                 draw_line_with_search(buf_row,
                                       line_text, line_len,
                                       draw_start, draw_len,
                                       start_col, row_attr,
                                       sel_active,
                                       sel_sr, sel_sc, sel_er, sel_ec,
+                                      bm_row, bm_col,
                                       ed);
                 attrset(row_attr);
                 clrtoeol();
@@ -671,13 +696,15 @@ static void draw_editor_area(struct Editor *ed)
                                        && (row_sel_start != row_sel_end)
                                        && (vis_sel_start < vis_sel_end);
 
-            int search_active = (ed->search_query[0] != '\0');
+            int search_active2 = (ed->search_query[0] != '\0');
+            int need_perchar2  = search_active2
+                                 || (bm_col >= 0 && buf_row == bm_row)
+                                 || (bm_col >= 0 && buf_row == ed->cursor_row);
 
-            if (search_active) {
+            if (need_perchar2) {
                 /*
-                 * Search mode: use the per-character renderer so we can apply
-                 * search-match highlights on top of selection and row highlights.
-                 * After rendering characters, fill the rest of the line normally.
+                 * Per-character rendering: used when search or bracket match
+                 * is active so individual characters can be highlighted.
                  */
                 if (draw_len > 0) {
                     draw_line_with_search(buf_row,
@@ -686,6 +713,7 @@ static void draw_editor_area(struct Editor *ed)
                                           start_col, row_attr,
                                           sel_active,
                                           sel_sr, sel_sc, sel_er, sel_ec,
+                                          bm_row, bm_col,
                                           ed);
                 }
                 attrset(row_attr);

@@ -70,6 +70,7 @@ struct Editor;
 #define CPAIR_TAB_INACTIVE 8   /* Inactive buffer tab in the tab bar     */
 #define CPAIR_SEARCH_MATCH 9   /* A search match (not the current one)   */
 #define CPAIR_SEARCH_CUR  10   /* The currently highlighted search match */
+#define CPAIR_BRACKET     11   /* Matching bracket pair highlight        */
 
 /* ---- Functions ------------------------------------------------------------ */
 

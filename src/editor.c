@@ -624,6 +624,213 @@ void editor_insert_char(Editor *ed, char c)
     editor_scroll(ed);
 }
 
+void editor_insert_pair(Editor *ed, char open, char close)
+{
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf) return;
+
+    /*
+     * If text is selected, delete the selection first (same behaviour as
+     * editor_insert_char: typing replaces the selection).
+     */
+    if (ed->sel_active) {
+        int sr, sc, er, ec;
+        selection_bounds(ed, &sr, &sc, &er, &ec);
+        char *text = selection_get_text(ed);
+        if (text) {
+            UndoRecord rec;
+            memset(&rec, 0, sizeof(rec));
+            rec.type              = UNDO_CUT;
+            rec.row               = sr; rec.col = sc;
+            rec.end_row           = er; rec.end_col = ec;
+            rec.c                 = 0;
+            rec.text              = text;
+            rec.cursor_row_before = ed->cursor_row;
+            rec.cursor_col_before = ed->cursor_col;
+            rec.cursor_row_after  = sr;
+            rec.cursor_col_after  = sc;
+            undo_push(&buf->undo_stack, rec);
+            undo_clear(&buf->redo_stack);
+            buffer_delete_region(buf, sr, sc, er, ec);
+            ed->cursor_row = sr; ed->cursor_col = sc;
+        }
+        editor_selection_clear(ed);
+    }
+
+    /*
+     * Build the two-character string: open char + close char.
+     * insert_text_at handles inserting the whole thing at once.
+     */
+    char pair[3] = { open, close, '\0' };
+    int start_row = ed->cursor_row;
+    int start_col = ed->cursor_col;
+    int end_row, end_col;
+
+    insert_text_at(buf, start_row, start_col, pair, &end_row, &end_col);
+
+    /*
+     * Record as a single UNDO_PASTE entry so both chars are removed with
+     * one Ctrl+Z.  end_row/end_col mark where the inserted text ends
+     * (needed so undo knows how much to delete).
+     *
+     * cursor_col_after is start_col+1 — BETWEEN the two chars — not the
+     * end of the pair.  This way redo also restores the cursor between them.
+     */
+    UndoRecord rec;
+    memset(&rec, 0, sizeof(rec));
+    rec.type              = UNDO_PASTE;
+    rec.row               = start_row;
+    rec.col               = start_col;
+    rec.end_row           = end_row;
+    rec.end_col           = end_col;
+    rec.text              = strdup(pair);   /* freed by undo_clear/undo_push */
+    rec.cursor_row_before = start_row;
+    rec.cursor_col_before = start_col;
+    rec.cursor_row_after  = start_row;      /* cursor lands between the pair */
+    rec.cursor_col_after  = start_col + 1;
+    undo_push(&buf->undo_stack, rec);
+    undo_clear(&buf->redo_stack);
+
+    /* Place cursor between the opening and closing character */
+    ed->cursor_row  = start_row;
+    ed->cursor_col  = start_col + 1;
+    ed->desired_col = ed->cursor_col;
+    editor_scroll(ed);
+}
+
+int editor_find_bracket_match(const Editor *ed, int *out_row, int *out_col)
+{
+    const Buffer *buf = ed->buffers[ed->current_buffer];
+    if (!buf) return 0;
+
+    int row = ed->cursor_row;
+    int col = ed->cursor_col;
+    int len = buffer_line_len(buf, row);
+
+    /* No character under the cursor (cursor is past end of line) */
+    if (col >= len) return 0;
+
+    char c = buffer_get_line(buf, row)[col];
+
+    /*
+     * Determine search direction and the open/close pair to match.
+     * forward = 1: cursor is on the opening bracket, scan forward.
+     * forward = 0: cursor is on the closing bracket, scan backward.
+     */
+    char open, close;
+    int  forward;
+
+    if      (c == '(') { open = '('; close = ')'; forward = 1; }
+    else if (c == '[') { open = '['; close = ']'; forward = 1; }
+    else if (c == '{') { open = '{'; close = '}'; forward = 1; }
+    else if (c == ')') { open = '('; close = ')'; forward = 0; }
+    else if (c == ']') { open = '['; close = ']'; forward = 0; }
+    else if (c == '}') { open = '{'; close = '}'; forward = 0; }
+    else return 0;   /* not a bracket character */
+
+    /*
+     * depth starts at 0.  Each time we see the same bracket type as the
+     * starting one, depth increases.  Each time we see the opposite, depth
+     * decreases.  When depth reaches -1, we have found the match.
+     *
+     * We start depth at 0 and begin scanning at the cursor position (which
+     * will immediately push depth to 1 for forward, or -1+1=0 for backward…
+     * actually we skip the starting char by adjusting the loop start).
+     */
+    int depth = 0;
+
+    if (forward) {
+        /*
+         * Scan forward through every line and column from (row, col).
+         * We include the starting column so the opening bracket itself sets
+         * depth to 1, and we stop when depth drops back to 0.
+         */
+        for (int r = row; r < buf->num_lines; r++) {
+            const char *line = buffer_get_line(buf, r);
+            int llen         = buffer_line_len(buf, r);
+            int start        = (r == row) ? col : 0;
+
+            for (int k = start; k < llen; k++) {
+                if      (line[k] == open)  depth++;
+                else if (line[k] == close) depth--;
+
+                /* depth == 0 means we matched the opening bracket at (row,col) */
+                if (depth == 0) {
+                    *out_row = r;
+                    *out_col = k;
+                    return 1;
+                }
+            }
+        }
+    } else {
+        /*
+         * Scan backward from (row, col) toward the start of the file.
+         * The closing bracket at (row, col) sets depth to -1; we stop when
+         * depth returns to 0.
+         */
+        for (int r = row; r >= 0; r--) {
+            const char *line = buffer_get_line(buf, r);
+            int llen         = buffer_line_len(buf, r);
+            int start        = (r == row) ? col : llen - 1;
+
+            for (int k = start; k >= 0; k--) {
+                if      (line[k] == close) depth--;
+                else if (line[k] == open)  depth++;
+
+                /* depth == 0 means we matched the closing bracket at (row,col) */
+                if (depth == 0) {
+                    *out_row = r;
+                    *out_col = k;
+                    return 1;
+                }
+            }
+        }
+    }
+
+    return 0;   /* no matching bracket found */
+}
+
+void editor_goto_line(Editor *ed)
+{
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf) return;
+
+    /*
+     * Prompt the user for a line number.  display_prompt() draws an input
+     * field in the status bar and returns the typed string, or NULL if the
+     * user pressed Escape.
+     */
+    char *input = display_prompt(ed, "Go to line: ");
+    if (!input) return;   /* user cancelled */
+
+    /*
+     * Parse the input as an integer.  atoi() returns 0 for non-numeric
+     * input, which we treat as "no valid number entered".
+     */
+    int target = atoi(input);
+    free(input);
+
+    if (target < 1) {
+        editor_set_status(ed, "Invalid line number.");
+        return;
+    }
+
+    /*
+     * Line numbers shown to the user are 1-based; internally they are 0-based.
+     * Clamp to the valid range so we never set cursor_row out of bounds.
+     */
+    int row = target - 1;
+    if (row >= buf->num_lines)
+        row = buf->num_lines - 1;
+
+    ed->cursor_row  = row;
+    ed->cursor_col  = 0;
+    ed->desired_col = 0;
+    editor_selection_clear(ed);
+    editor_scroll(ed);
+    editor_set_status(ed, "Line %d", row + 1);
+}
+
 void editor_toggle_word_wrap(Editor *ed)
 {
     ed->word_wrap = !ed->word_wrap;
