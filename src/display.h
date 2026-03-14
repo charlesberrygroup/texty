@@ -38,7 +38,13 @@ struct Editor;
  * 4 digits + 1 space = "9999 " fits lines up to 9,999.
  * If you want 5-digit support, bump this to 6.
  */
-#define GUTTER_WIDTH  5
+#define GUTTER_WIDTH    5
+
+/**
+ * Height of the tab bar in rows.  The tab bar occupies the very top row of
+ * the terminal and shows all open buffers, highlighting the current one.
+ */
+#define TAB_BAR_HEIGHT  1
 
 /* ---- Color pair IDs -------------------------------------------------------
  *
@@ -60,6 +66,8 @@ struct Editor;
 #define CPAIR_STATUS_DIRTY 4   /* Status bar when file has unsaved edits */
 #define CPAIR_CURLINE      5   /* Reserved — not currently used          */
 #define CPAIR_SELECTION    6   /* Selected text highlight                */
+#define CPAIR_TAB_ACTIVE   7   /* Active buffer tab in the tab bar       */
+#define CPAIR_TAB_INACTIVE 8   /* Inactive buffer tab in the tab bar     */
 
 /* ---- Functions ------------------------------------------------------------ */
 
@@ -90,10 +98,22 @@ void display_update_size(struct Editor *ed);
  *
  * Call once per iteration of the main event loop, after processing input.
  * Draws:
- *   1. The text content of the current buffer (with line numbers in the gutter)
- *   2. The status bar at the bottom
- *   3. Positions the terminal cursor at the editor cursor position
+ *   1. The tab bar at the top (row 0)
+ *   2. The text content of the current buffer (rows 1..term_rows-2)
+ *   3. The status bar at the bottom (row term_rows-1)
+ *   4. Positions the terminal cursor at the editor cursor position
  */
 void display_render(struct Editor *ed);
+
+/**
+ * display_prompt — show an inline prompt in the status bar and read input.
+ *
+ * Draws `prompt` in the status bar, then lets the user type a response.
+ * Supports Backspace to delete and Escape to cancel.
+ *
+ * Returns a heap-allocated string (must be free()'d by the caller) when
+ * the user presses Enter, or NULL if they pressed Escape.
+ */
+char *display_prompt(struct Editor *ed, const char *prompt);
 
 #endif /* DISPLAY_H */

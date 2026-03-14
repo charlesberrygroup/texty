@@ -54,11 +54,11 @@ that all future phases will build on.
 - [ ] Case-sensitive and regex toggle options
 
 ### Multiple Buffers (Tabs)
-- [ ] Open new file in a new buffer (Ctrl+O)
-- [ ] Create new empty buffer (Ctrl+N)
-- [ ] Switch between buffers (Ctrl+Tab / Ctrl+Shift+Tab)
-- [ ] Close current buffer (Ctrl+W)
-- [ ] Tab bar at the top showing open buffers
+- [x] Open new file in a new buffer (Ctrl+O)
+- [x] Create new empty buffer (Ctrl+N)
+- [x] Switch between buffers (Ctrl+Right / Ctrl+Left)
+- [x] Close current buffer (Ctrl+W)
+- [x] Tab bar at the top showing open buffers
 
 ### Syntax Highlighting
 - [ ] Language detection by file extension

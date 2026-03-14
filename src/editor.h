@@ -138,6 +138,25 @@ int editor_open_file(Editor *ed, const char *path);
 int editor_save(Editor *ed);
 
 /**
+ * editor_next_buffer — switch to the next open buffer (wraps around).
+ */
+void editor_next_buffer(Editor *ed);
+
+/**
+ * editor_prev_buffer — switch to the previous open buffer (wraps around).
+ */
+void editor_prev_buffer(Editor *ed);
+
+/**
+ * editor_close_buffer — close the current buffer.
+ *
+ * If the buffer has unsaved changes, the first call shows a warning and
+ * requires a second Ctrl+W to confirm.  If this is the last buffer, a new
+ * empty buffer is created so there is always at least one buffer open.
+ */
+void editor_close_buffer(Editor *ed);
+
+/**
  * editor_current_buffer — return a pointer to the currently active Buffer.
  *
  * May return NULL if no buffers are open (should not happen in normal use).

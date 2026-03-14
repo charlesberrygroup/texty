@@ -21,6 +21,8 @@
 #include "editor.h"
 #include "display.h"
 
+#include <stdlib.h>   /* for free() */
+
 #include <ncurses.h>
 
 /* Convenience macro: CTRL('s') is the key code for Ctrl+S, etc. */
@@ -227,8 +229,51 @@ void input_process_key(struct Editor *ed)
             break;
 
         /* ------------------------------------------------------------------ *
+         * Buffer switching — Ctrl+Right / Ctrl+Left
+         *
+         * In xterm-256color (macOS Terminal, iTerm2), ncurses reports:
+         *   Ctrl+Right Arrow → key code 561
+         *   Ctrl+Left  Arrow → key code 546
+         *
+         * These are raw numeric values from the terminfo database for the
+         * xterm-256color terminal type.  If your terminal uses different
+         * codes, run `cat -v` and press the key to find the raw sequence,
+         * then look up the ncurses integer via `tput` or adjust these values.
+         * ------------------------------------------------------------------ */
+        case 561:              /* Ctrl+Right — next buffer */
+            editor_next_buffer(ed);
+            break;
+
+        case 546:              /* Ctrl+Left  — previous buffer */
+            editor_prev_buffer(ed);
+            break;
+
+        /* ------------------------------------------------------------------ *
          * File operations
          * ------------------------------------------------------------------ */
+
+        case CTRL('n'):        /* Ctrl+N — New empty buffer */
+            editor_new_buffer(ed);
+            break;
+
+        case CTRL('o'):        /* Ctrl+O — Open file */
+        {
+            /*
+             * display_prompt() draws an input field in the status bar and
+             * returns a heap-allocated string of what the user typed, or
+             * NULL if they pressed Escape.
+             */
+            char *path = display_prompt(ed, "Open file: ");
+            if (path && path[0] != '\0') {
+                editor_open_file(ed, path);
+            }
+            free(path);
+            break;
+        }
+
+        case CTRL('w'):        /* Ctrl+W — Close current buffer */
+            editor_close_buffer(ed);
+            break;
 
         case CTRL('s'):        /* Ctrl+S — Save */
             editor_save(ed);

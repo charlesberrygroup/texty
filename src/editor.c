@@ -153,11 +153,12 @@ static void insert_text_at(Buffer *buf, int row, int col,
 /*
  * editor_rows — how many rows are available for text content.
  *
- * We reserve 1 row at the bottom for the status bar.
+ * We reserve 1 row at the bottom for the status bar and TAB_BAR_HEIGHT rows
+ * at the top for the tab bar.
  */
 static int editor_rows(const Editor *ed)
 {
-    return ed->term_rows - 1;
+    return ed->term_rows - 1 - TAB_BAR_HEIGHT;
 }
 
 /*
@@ -197,6 +198,45 @@ void editor_cleanup(Editor *ed)
 }
 
 /* ============================================================================
+ * Buffer management — internal cursor save/restore helpers
+ * ============================================================================ */
+
+/*
+ * save_cursor_to_buffer — copy the editor's live cursor/viewport state into
+ * the current buffer's saved-state fields.
+ *
+ * Call this BEFORE switching away from a buffer so the position is preserved.
+ */
+static void save_cursor_to_buffer(Editor *ed)
+{
+    if (ed->num_buffers == 0) return;
+    Buffer *buf      = ed->buffers[ed->current_buffer];
+    buf->cursor_row  = ed->cursor_row;
+    buf->cursor_col  = ed->cursor_col;
+    buf->desired_col = ed->desired_col;
+    buf->view_row    = ed->view_row;
+    buf->view_col    = ed->view_col;
+}
+
+/*
+ * restore_cursor_from_buffer — load the current buffer's saved cursor/viewport
+ * state back into the editor's live fields.
+ *
+ * Call this AFTER switching to a new buffer so the cursor appears where it was
+ * last time the user had that buffer open.
+ */
+static void restore_cursor_from_buffer(Editor *ed)
+{
+    if (ed->num_buffers == 0) return;
+    Buffer *buf      = ed->buffers[ed->current_buffer];
+    ed->cursor_row   = buf->cursor_row;
+    ed->cursor_col   = buf->cursor_col;
+    ed->desired_col  = buf->desired_col;
+    ed->view_row     = buf->view_row;
+    ed->view_col     = buf->view_col;
+}
+
+/* ============================================================================
  * Buffer management
  * ============================================================================ */
 
@@ -208,6 +248,10 @@ int editor_new_buffer(Editor *ed)
         return -1;
     }
 
+    /* Save cursor state for the buffer we are leaving (if any) */
+    if (ed->num_buffers > 0)
+        save_cursor_to_buffer(ed);
+
     Buffer *buf = buffer_create();
     if (!buf) {
         editor_set_status(ed, "Error: out of memory");
@@ -219,12 +263,9 @@ int editor_new_buffer(Editor *ed)
     ed->num_buffers++;
     ed->current_buffer = idx;
 
-    /* Reset cursor and viewport for the new buffer */
-    ed->cursor_row  = 0;
-    ed->cursor_col  = 0;
-    ed->desired_col = 0;
-    ed->view_row    = 0;
-    ed->view_col    = 0;
+    /* New buffer always starts at the top-left — restore from the fresh buffer */
+    restore_cursor_from_buffer(ed);
+    editor_selection_clear(ed);
 
     return 0;
 }
@@ -236,6 +277,10 @@ int editor_open_file(Editor *ed, const char *path)
         return -1;
     }
 
+    /* Save cursor state for the buffer we are leaving (if any) */
+    if (ed->num_buffers > 0)
+        save_cursor_to_buffer(ed);
+
     Buffer *buf = buffer_create();
     if (!buf) {
         editor_set_status(ed, "Error: out of memory");
@@ -246,7 +291,6 @@ int editor_open_file(Editor *ed, const char *path)
         /* File might not exist yet — treat as a new file with the given name */
         free(buf->filename);
         buf->filename = strdup(path);
-        /* Leave the buffer with one empty line (from buffer_create) */
     }
 
     int idx = ed->num_buffers;
@@ -254,12 +298,9 @@ int editor_open_file(Editor *ed, const char *path)
     ed->num_buffers++;
     ed->current_buffer = idx;
 
-    /* Reset cursor and viewport */
-    ed->cursor_row  = 0;
-    ed->cursor_col  = 0;
-    ed->desired_col = 0;
-    ed->view_row    = 0;
-    ed->view_col    = 0;
+    /* New buffer starts at the top-left */
+    restore_cursor_from_buffer(ed);
+    editor_selection_clear(ed);
 
     return 0;
 }
@@ -287,6 +328,85 @@ Buffer *editor_current_buffer(Editor *ed)
 {
     if (ed->num_buffers == 0) return NULL;
     return ed->buffers[ed->current_buffer];
+}
+
+void editor_next_buffer(Editor *ed)
+{
+    if (ed->num_buffers <= 1) return;   /* nothing to switch to */
+
+    save_cursor_to_buffer(ed);
+    editor_selection_clear(ed);
+
+    /* Advance to the next buffer, wrapping from last back to first */
+    ed->current_buffer = (ed->current_buffer + 1) % ed->num_buffers;
+
+    restore_cursor_from_buffer(ed);
+}
+
+void editor_prev_buffer(Editor *ed)
+{
+    if (ed->num_buffers <= 1) return;
+
+    save_cursor_to_buffer(ed);
+    editor_selection_clear(ed);
+
+    /* Move to the previous buffer, wrapping from first to last */
+    ed->current_buffer = (ed->current_buffer - 1 + ed->num_buffers)
+                         % ed->num_buffers;
+
+    restore_cursor_from_buffer(ed);
+}
+
+void editor_close_buffer(Editor *ed)
+{
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf) return;
+
+    /*
+     * If the buffer has unsaved changes, require a second Ctrl+W to confirm.
+     * We use a static flag (same pattern as the quit confirmation).
+     */
+    if (buf->dirty) {
+        static int warn_pending = 0;
+        if (!warn_pending) {
+            editor_set_status(ed,
+                "Unsaved changes! Press Ctrl+W again to close without saving.");
+            warn_pending = 1;
+            return;
+        }
+        warn_pending = 0;
+    }
+
+    int idx = ed->current_buffer;
+
+    /* Free the buffer and its undo/redo text pointers */
+    buffer_destroy(ed->buffers[idx]);
+
+    /*
+     * Shift all buffers after `idx` one slot to the left to close the gap.
+     * memmove is safe for overlapping regions.
+     */
+    memmove(&ed->buffers[idx],
+            &ed->buffers[idx + 1],
+            (ed->num_buffers - idx - 1) * sizeof(Buffer *));
+
+    ed->num_buffers--;
+
+    /*
+     * If we just closed the last buffer, create a new empty one so the
+     * editor always has something to display.
+     */
+    if (ed->num_buffers == 0) {
+        editor_new_buffer(ed);
+        return;
+    }
+
+    /* Clamp current_buffer so it points to a valid buffer */
+    if (ed->current_buffer >= ed->num_buffers)
+        ed->current_buffer = ed->num_buffers - 1;
+
+    restore_cursor_from_buffer(ed);
+    editor_selection_clear(ed);
 }
 
 /* ============================================================================

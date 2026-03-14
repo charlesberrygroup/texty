@@ -58,6 +58,12 @@ typedef struct {
  *   undo_stack Stack of past operations — pop to undo.
  *   redo_stack Stack of undone operations — pop to redo.
  *              Cleared whenever a new edit is made.
+ *
+ * Saved cursor / viewport state
+ * -----------------------------
+ * When the user switches to a different buffer, the editor saves the current
+ * cursor and viewport positions here so they are restored when switching back.
+ * These fields start at 0 (top-left) for a freshly created buffer.
  */
 typedef struct {
     Line      *lines;
@@ -67,6 +73,15 @@ typedef struct {
     int        dirty;
     UndoStack  undo_stack;
     UndoStack  redo_stack;
+
+    /* Saved cursor position (restored when this buffer becomes active again) */
+    int        cursor_row;
+    int        cursor_col;
+    int        desired_col;
+
+    /* Saved viewport position */
+    int        view_row;
+    int        view_col;
 } Buffer;
 
 /* ---- Lifecycle ------------------------------------------------------------ */
