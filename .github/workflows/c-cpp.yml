@@ -19,5 +19,11 @@ jobs:
     - name: Build
       run: make
 
+    - name: Test
+      run: make test
+
+    - name: Test (AddressSanitizer)
+      run: make test-debug
+
     - name: Build (AddressSanitizer)
       run: make debug

@@ -579,6 +579,7 @@ void editor_insert_char(Editor *ed, char c)
         char *text = selection_get_text(ed);
         if (text) {
             UndoRecord rec;
+            memset(&rec, 0, sizeof(rec));
             rec.type              = UNDO_CUT;
             rec.row               = sr; rec.col = sc;
             rec.end_row           = er; rec.end_col = ec;
@@ -602,6 +603,7 @@ void editor_insert_char(Editor *ed, char c)
      * cursor position after (cursor_col + 1, for redo).
      */
     UndoRecord rec;
+    memset(&rec, 0, sizeof(rec));
     rec.type              = UNDO_INSERT_CHAR;
     rec.row               = ed->cursor_row;
     rec.col               = ed->cursor_col;
@@ -719,6 +721,7 @@ void editor_insert_newline(Editor *ed)
      * The cursor_col_after accounts for the indentation that will be inserted.
      */
     UndoRecord rec;
+    memset(&rec, 0, sizeof(rec));
     rec.type              = UNDO_INSERT_NEWLINE;
     rec.row               = ed->cursor_row;
     rec.col               = ed->cursor_col;
@@ -769,6 +772,7 @@ void editor_backspace(Editor *ed)
     }
 
     UndoRecord rec;
+    memset(&rec, 0, sizeof(rec));
 
     if (ed->cursor_col > 0) {
         /*
@@ -840,6 +844,7 @@ void editor_delete_char(Editor *ed)
 
     int line_len = buffer_line_len(buf, ed->cursor_row);
     UndoRecord rec;
+    memset(&rec, 0, sizeof(rec));
 
     if (ed->cursor_col < line_len) {
         /* Delete the character UNDER the cursor (at cursor_col) */
@@ -1335,6 +1340,7 @@ void editor_cut(Editor *ed)
      * strdup() allocates a new copy of the string — the undo stack owns it.
      */
     UndoRecord rec;
+    memset(&rec, 0, sizeof(rec));
     rec.type              = UNDO_CUT;
     rec.row               = sr;
     rec.col               = sc;
@@ -1406,6 +1412,7 @@ void editor_paste(Editor *ed)
      * the same content.
      */
     UndoRecord rec;
+    memset(&rec, 0, sizeof(rec));
     rec.type              = UNDO_PASTE;
     rec.row               = paste_row;
     rec.col               = paste_col;

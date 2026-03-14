@@ -83,6 +83,57 @@ debug: LIBS   += -fsanitize=address,undefined
 debug: $(TARGET)
 
 # --------------------------------------------------------------------------
+# Tests
+#
+# Each test file in tests/ compiles into its own binary linked against the
+# source modules it exercises.  display.o, input.o, and main.o are excluded
+# because they depend on ncurses or are entry points.
+#
+# Usage:
+#   make test        — build and run all tests
+#   make test-debug  — same but with AddressSanitizer
+# --------------------------------------------------------------------------
+
+TESTDIR   = tests
+TESTOBJDIR = $(OBJDIR)/tests
+
+# Source modules needed by tests (everything except main, display, input).
+# display_stub.c provides fake implementations of display functions that
+# editor.c calls (e.g. display_prompt), so we can link without ncurses.
+TEST_DEPS = $(OBJDIR)/buffer.o $(OBJDIR)/undo.o $(OBJDIR)/editor.o \
+            $(TESTDIR)/display_stub.c
+
+# One binary per test source file
+TEST_SRCS = $(wildcard $(TESTDIR)/test_*.c)
+TEST_BINS = $(patsubst $(TESTDIR)/%.c, $(TESTOBJDIR)/%, $(TEST_SRCS))
+
+# Build the test object directory
+$(TESTOBJDIR):
+	mkdir -p $(TESTOBJDIR)
+
+# Rule: compile one test binary from its .c file + shared object files
+$(TESTOBJDIR)/%: $(TESTDIR)/%.c $(TEST_DEPS) | $(TESTOBJDIR)
+	$(CC) $(CFLAGS) -I$(TESTDIR) $^ -o $@ $(LIBS)
+
+.PHONY: test
+test: $(TEST_BINS)
+	@echo ""
+	@failed=0; \
+	for t in $(TEST_BINS); do \
+	    ./$$t || failed=1; \
+	done; \
+	if [ $$failed -ne 0 ]; then \
+	    echo "Some tests FAILED."; exit 1; \
+	else \
+	    echo "All test suites passed."; \
+	fi
+
+.PHONY: test-debug
+test-debug: CFLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer
+test-debug: LIBS   += -fsanitize=address,undefined
+test-debug: test
+
+# --------------------------------------------------------------------------
 # Convenience targets
 # --------------------------------------------------------------------------
 .PHONY: run
