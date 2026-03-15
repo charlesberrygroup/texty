@@ -137,7 +137,7 @@ that all future phases will build on.
 - [x] Show modified/added/deleted lines in gutter
 - [x] Git status panel
 - [x] Inline diff view
-- [ ] Stage hunks
+- [x] Stage hunks
 - [ ] Commit from editor
 
 ### Navigation & Search

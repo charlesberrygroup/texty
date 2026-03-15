@@ -725,6 +725,10 @@ void input_process_key(struct Editor *ed)
             editor_toggle_inline_diff(ed);
             break;
 
+        case KEY_F(11):        /* F11 — Stage hunk at cursor */
+            editor_stage_hunk(ed);
+            break;
+
         case CTRL('b'):        /* Ctrl+B — Toggle file explorer panel */
             /*
              * editor_toggle_filetree() handles all the logic:

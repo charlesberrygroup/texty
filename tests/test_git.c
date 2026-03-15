@@ -608,6 +608,220 @@ TEST(test_chunks_free_idempotent)
 }
 
 /* ============================================================================
+ * Hunk patch extraction — for staging individual hunks
+ *
+ * These tests verify git_build_hunk_patch(), which extracts a single hunk
+ * from a full unified diff as a valid patch that can be piped to
+ * `git apply --cached`.
+ * ============================================================================ */
+
+TEST(test_patch_null_diff)
+{
+    char *patch = git_build_hunk_patch(NULL, 0);
+    ASSERT(patch == NULL, "NULL diff returns NULL");
+}
+
+TEST(test_patch_empty_diff)
+{
+    char *patch = git_build_hunk_patch("", 0);
+    ASSERT(patch == NULL, "empty diff returns NULL");
+}
+
+TEST(test_patch_no_matching_hunk)
+{
+    /*
+     * Hunk covers lines 0..0 (1-based line 1, count 1 → 0-based line 0).
+     * Searching for line 5 should return NULL.
+     */
+    const char *diff =
+        "diff --git a/f.c b/f.c\n"
+        "index abc..def 100644\n"
+        "--- a/f.c\n"
+        "+++ b/f.c\n"
+        "@@ -1,1 +1,1 @@\n"
+        "-old\n"
+        "+new\n";
+
+    char *patch = git_build_hunk_patch(diff, 5);
+    ASSERT(patch == NULL, "no hunk at line 5");
+}
+
+TEST(test_patch_single_hunk)
+{
+    /*
+     * Single hunk: modification at line 1 (1-based) → 0-based line 0.
+     * The extracted patch should contain the file header + that hunk.
+     */
+    const char *diff =
+        "diff --git a/f.c b/f.c\n"
+        "index abc..def 100644\n"
+        "--- a/f.c\n"
+        "+++ b/f.c\n"
+        "@@ -1,1 +1,1 @@\n"
+        "-old line\n"
+        "+new line\n";
+
+    char *patch = git_build_hunk_patch(diff, 0);
+    ASSERT(patch != NULL, "patch extracted for line 0");
+
+    /* The patch should start with the file header */
+    ASSERT(strstr(patch, "diff --git a/f.c b/f.c") != NULL,
+           "patch contains diff header");
+    ASSERT(strstr(patch, "--- a/f.c") != NULL,
+           "patch contains --- line");
+    ASSERT(strstr(patch, "+++ b/f.c") != NULL,
+           "patch contains +++ line");
+
+    /* And contain the hunk */
+    ASSERT(strstr(patch, "@@ -1,1 +1,1 @@") != NULL,
+           "patch contains hunk header");
+    ASSERT(strstr(patch, "-old line") != NULL,
+           "patch contains removed line");
+    ASSERT(strstr(patch, "+new line") != NULL,
+           "patch contains added line");
+
+    free(patch);
+}
+
+TEST(test_patch_selects_correct_hunk)
+{
+    /*
+     * Two hunks: line 1 and line 10 (1-based).
+     * Asking for line 9 (0-based) should get the second hunk.
+     */
+    const char *diff =
+        "diff --git a/f.c b/f.c\n"
+        "index abc..def 100644\n"
+        "--- a/f.c\n"
+        "+++ b/f.c\n"
+        "@@ -1,1 +1,1 @@\n"
+        "-first old\n"
+        "+first new\n"
+        "@@ -10,1 +10,1 @@\n"
+        "-second old\n"
+        "+second new\n";
+
+    /* Line 0 should get hunk 1 */
+    char *patch1 = git_build_hunk_patch(diff, 0);
+    ASSERT(patch1 != NULL, "patch for line 0");
+    ASSERT(strstr(patch1, "-first old") != NULL,  "hunk 1 old line");
+    ASSERT(strstr(patch1, "-second old") == NULL, "hunk 2 NOT in patch 1");
+    free(patch1);
+
+    /* Line 9 should get hunk 2 */
+    char *patch2 = git_build_hunk_patch(diff, 9);
+    ASSERT(patch2 != NULL, "patch for line 9");
+    ASSERT(strstr(patch2, "-second old") != NULL, "hunk 2 old line");
+    ASSERT(strstr(patch2, "-first old") == NULL,  "hunk 1 NOT in patch 2");
+    free(patch2);
+}
+
+TEST(test_patch_multi_line_hunk)
+{
+    /*
+     * Hunk covers lines 5..7 (1-based 5, count 3).
+     * Any of lines 4, 5, 6 (0-based) should match.
+     */
+    const char *diff =
+        "diff --git a/f.c b/f.c\n"
+        "index abc..def 100644\n"
+        "--- a/f.c\n"
+        "+++ b/f.c\n"
+        "@@ -5,3 +5,3 @@\n"
+        "-line a\n"
+        "-line b\n"
+        "-line c\n"
+        "+LINE A\n"
+        "+LINE B\n"
+        "+LINE C\n";
+
+    /* All three lines should match this hunk */
+    char *p4 = git_build_hunk_patch(diff, 4);
+    ASSERT(p4 != NULL, "line 4 matches");
+    ASSERT(strstr(p4, "-line a") != NULL, "correct hunk for line 4");
+    free(p4);
+
+    char *p5 = git_build_hunk_patch(diff, 5);
+    ASSERT(p5 != NULL, "line 5 matches");
+    free(p5);
+
+    char *p6 = git_build_hunk_patch(diff, 6);
+    ASSERT(p6 != NULL, "line 6 matches");
+    free(p6);
+
+    /* Line 3 and 7 should NOT match */
+    char *p3 = git_build_hunk_patch(diff, 3);
+    ASSERT(p3 == NULL, "line 3 does not match");
+
+    char *p7 = git_build_hunk_patch(diff, 7);
+    ASSERT(p7 == NULL, "line 7 does not match");
+}
+
+TEST(test_patch_deletion_hunk)
+{
+    /*
+     * Pure deletion: 2 lines deleted, new_count=0.
+     * @@ -3,2 +3,0 @@ means lines were deleted at position 3 (1-based)
+     * in the new file.  The DELETED marker goes on line 2 (0-based).
+     *
+     * The hunk should match line 2 (the line above the deletion point).
+     */
+    const char *diff =
+        "diff --git a/f.c b/f.c\n"
+        "index abc..def 100644\n"
+        "--- a/f.c\n"
+        "+++ b/f.c\n"
+        "@@ -3,2 +3,0 @@\n"
+        "-removed a\n"
+        "-removed b\n";
+
+    /* Line 2 (0-based) should match — it's the line before the deletion */
+    char *patch = git_build_hunk_patch(diff, 2);
+    ASSERT(patch != NULL, "deletion hunk matches line 2");
+    ASSERT(strstr(patch, "-removed a") != NULL, "contains removed lines");
+    free(patch);
+
+    /* Line 1 should not match */
+    char *p1 = git_build_hunk_patch(diff, 1);
+    ASSERT(p1 == NULL, "line 1 does not match deletion hunk");
+}
+
+TEST(test_patch_hunk_with_context)
+{
+    /*
+     * Hunk with context lines.
+     * @@ -5,5 +5,5 @@ means 5 lines starting at line 5 (1-based),
+     * so 0-based lines 4..8.
+     * Even context lines within the hunk should match.
+     */
+    const char *diff =
+        "diff --git a/f.c b/f.c\n"
+        "index abc..def 100644\n"
+        "--- a/f.c\n"
+        "+++ b/f.c\n"
+        "@@ -5,5 +5,5 @@\n"
+        " context 1\n"
+        " context 2\n"
+        "-old mid\n"
+        "+new mid\n"
+        " context 3\n";
+
+    /* Context line at 0-based 4 should match (it's in the hunk range) */
+    char *p4 = git_build_hunk_patch(diff, 4);
+    ASSERT(p4 != NULL, "context line 4 matches");
+    free(p4);
+
+    /* Changed line at 0-based 6 should match */
+    char *p6 = git_build_hunk_patch(diff, 6);
+    ASSERT(p6 != NULL, "changed line 6 matches");
+    free(p6);
+
+    /* Line 3 (before hunk) should not match */
+    char *p3 = git_build_hunk_patch(diff, 3);
+    ASSERT(p3 == NULL, "line 3 outside hunk");
+}
+
+/* ============================================================================
  * main
  * ============================================================================ */
 
@@ -637,6 +851,16 @@ int main(void)
     RUN(test_chunks_multi_line_modify);
     RUN(test_phantom_lines_in_range);
     RUN(test_chunks_free_idempotent);
+
+    /* Hunk patch extraction (staging) */
+    RUN(test_patch_null_diff);
+    RUN(test_patch_empty_diff);
+    RUN(test_patch_no_matching_hunk);
+    RUN(test_patch_single_hunk);
+    RUN(test_patch_selects_correct_hunk);
+    RUN(test_patch_multi_line_hunk);
+    RUN(test_patch_deletion_hunk);
+    RUN(test_patch_hunk_with_context);
 
     TEST_SUMMARY();
 }

@@ -612,6 +612,17 @@ void editor_toggle_git_panel(Editor *ed);
  */
 void editor_toggle_inline_diff(Editor *ed);
 
+/* ---- Hunk staging --------------------------------------------------------- */
+
+/**
+ * editor_stage_hunk — stage the diff hunk at the cursor position (F11).
+ *
+ * If the cursor is on a line with unstaged changes, stages that hunk to
+ * the git index.  Refreshes the git status panel if it's open.
+ * Shows a status message indicating success or failure.
+ */
+void editor_stage_hunk(Editor *ed);
+
 /* ---- Misc ----------------------------------------------------------------- */
 
 /**

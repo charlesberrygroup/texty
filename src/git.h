@@ -217,6 +217,38 @@ char *git_get_diff_text(const char *repo_root, const char *filepath);
 int git_phantom_lines_in_range(const GitDiffChunks *dc,
                                int from_line, int to_line);
 
+/* ---- Hunk staging --------------------------------------------------------- */
+
+/**
+ * git_build_hunk_patch — extract a single-hunk patch from a full diff.
+ *
+ * Finds the hunk in `diff_text` whose new-file line range covers
+ * `target_line` (0-based buffer line), and builds a complete patch
+ * consisting of the file headers (diff --git, ---, +++) plus that single
+ * hunk.  The result can be piped directly to `git apply --cached`.
+ *
+ * Returns a heap-allocated patch string (caller must free), or NULL if
+ * no hunk covers the target line.
+ *
+ * Exposed publicly so it can be unit-tested without running git.
+ */
+char *git_build_hunk_patch(const char *diff_text, int target_line);
+
+/**
+ * git_stage_hunk_at_line — stage the diff hunk covering a buffer line.
+ *
+ * Runs `git diff -- <file>` to get UNSTAGED changes, finds the hunk
+ * that covers `target_line` (0-based), extracts it as a standalone patch,
+ * and applies it to the index with `git apply --cached`.
+ *
+ * Uses `git diff` (not `git diff HEAD`) so only unstaged changes are
+ * staged.  If the line has no unstaged changes, returns -1.
+ *
+ * Returns 0 on success, -1 on error (no hunk found, apply failed, etc.).
+ */
+int git_stage_hunk_at_line(const char *repo_root, const char *filepath,
+                           int target_line);
+
 /* ---- Git status list (for the status panel) ------------------------------- */
 
 /** Maximum number of entries in a git status listing. */

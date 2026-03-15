@@ -687,6 +687,214 @@ int git_phantom_lines_in_range(const GitDiffChunks *dc,
 }
 
 /* ============================================================================
+ * Hunk staging — extract a single hunk and apply it to the index
+ * ============================================================================ */
+
+/*
+ * git_build_hunk_patch — extract a single-hunk patch from a full diff.
+ *
+ * A unified diff has this structure:
+ *
+ *   diff --git a/file b/file        \
+ *   index abc123..def456 100644      |  file headers
+ *   --- a/file                       |
+ *   +++ b/file                      /
+ *   @@ -old_start,old_count +new_start,new_count @@    \
+ *    context line                                        |  hunk 1
+ *   -removed line                                        |
+ *   +added line                                         /
+ *   @@ -old_start2,old_count2 +new_start2,new_count2 @@  \
+ *    ...                                                   |  hunk 2
+ *   ...                                                   /
+ *
+ * A valid patch for `git apply` needs: file headers + one or more hunks.
+ * This function extracts the file headers plus exactly ONE hunk — the one
+ * whose new-file range covers `target_line` (0-based).
+ *
+ * The "new-file range" of a hunk is [new_start-1, new_start-1+new_count)
+ * in 0-based indexing.  For pure deletion hunks (new_count == 0), we
+ * expand the range to include the line just before the deletion point,
+ * since that's where the gutter shows the DELETED marker.
+ */
+char *git_build_hunk_patch(const char *diff_text, int target_line)
+{
+    if (!diff_text || diff_text[0] == '\0' || target_line < 0)
+        return NULL;
+
+    const char *p = diff_text;
+
+    /*
+     * Step 1: Find the end of the file header.
+     *
+     * The file header is everything from the start of the diff text up to
+     * (but not including) the first @@ hunk header line.  This includes
+     * "diff --git ...", "index ...", "--- a/...", "+++ b/...".
+     */
+    const char *file_hdr_end = NULL;
+
+    while (*p) {
+        if (p[0] == '@' && p[1] == '@') {
+            file_hdr_end = p;
+            break;
+        }
+        while (*p && *p != '\n') p++;
+        if (*p == '\n') p++;
+    }
+
+    if (!file_hdr_end) return NULL;  /* no hunks in the diff */
+
+    /*
+     * Step 2: Walk through hunks to find the one covering target_line.
+     *
+     * For each @@ line, parse the new-file range (+new_start,new_count).
+     * The hunk body extends from the @@ line to the next @@ line or EOF.
+     */
+    p = file_hdr_end;
+    const char *found_start = NULL;
+    const char *found_end   = NULL;
+
+    while (*p) {
+        /* Skip non-hunk-header lines */
+        if (p[0] != '@' || p[1] != '@') {
+            while (*p && *p != '\n') p++;
+            if (*p == '\n') p++;
+            continue;
+        }
+
+        /* Remember where this hunk starts */
+        const char *hunk_start = p;
+
+        /*
+         * Parse the new-file range from the hunk header.
+         * Format: @@ -old_start[,old_count] +new_start[,new_count] @@
+         *
+         * We look for '+' to find new_start, then optionally ',new_count'.
+         * If new_count is missing (single-line hunk), it defaults to 1.
+         */
+        const char *plus = strchr(p, '+');
+        if (!plus) break;
+
+        int new_start = 0, new_count = 1;
+        int n = sscanf(plus + 1, "%d,%d", &new_start, &new_count);
+        if (n < 1) break;
+        if (n == 1) new_count = 1;  /* single-line hunk: no comma */
+
+        /* Skip past the @@ line */
+        while (*p && *p != '\n') p++;
+        if (*p == '\n') p++;
+
+        /* Find the end of the hunk body (next @@ or end of string) */
+        const char *hunk_end = p;
+        while (*hunk_end) {
+            if (hunk_end[0] == '@' && hunk_end[1] == '@') break;
+            while (*hunk_end && *hunk_end != '\n') hunk_end++;
+            if (*hunk_end == '\n') hunk_end++;
+        }
+
+        /*
+         * Check if target_line falls within this hunk's new-file range.
+         *
+         * range_start = new_start - 1   (convert 1-based to 0-based)
+         * range_end   = range_start + new_count
+         *
+         * For pure deletion hunks (new_count == 0), no lines exist in the
+         * new file for this hunk.  The gutter marks the line BEFORE the
+         * deletion point (new_start - 1), so we expand the range to
+         * [new_start - 1, new_start) — a single-line range covering the
+         * line above the deletion.
+         */
+        int range_start = new_start - 1;
+        if (range_start < 0) range_start = 0;
+        int range_end = range_start + (new_count > 0 ? new_count : 1);
+
+        if (target_line >= range_start && target_line < range_end) {
+            found_start = hunk_start;
+            found_end   = hunk_end;
+            break;
+        }
+
+        p = hunk_end;
+    }
+
+    if (!found_start) return NULL;  /* no hunk covers target_line */
+
+    /*
+     * Step 3: Build the patch = file_header + selected_hunk.
+     */
+    int hdr_len  = (int)(file_hdr_end - diff_text);
+    int hunk_len = (int)(found_end - found_start);
+    int total    = hdr_len + hunk_len + 1;  /* +1 for null terminator */
+
+    char *patch = malloc(total);
+    if (!patch) return NULL;
+
+    memcpy(patch, diff_text, hdr_len);
+    memcpy(patch + hdr_len, found_start, hunk_len);
+    patch[hdr_len + hunk_len] = '\0';
+
+    return patch;
+}
+
+int git_stage_hunk_at_line(const char *repo_root, const char *filepath,
+                           int target_line)
+{
+    if (!repo_root || !filepath) return -1;
+
+    /*
+     * Step 1: Get the UNSTAGED diff for this file.
+     *
+     * `git diff -- <file>` shows changes between the INDEX and the working
+     * tree — i.e. only unstaged changes.  This is what we want to stage.
+     *
+     * We do NOT use `git diff HEAD` here because that includes already-staged
+     * changes, and re-staging them could cause conflicts.
+     */
+    char cmd[4096];
+    snprintf(cmd, sizeof(cmd),
+             "git -C '%s' diff -- '%s' 2>/dev/null", repo_root, filepath);
+
+    char *diff = run_command(cmd);
+    if (!diff || diff[0] == '\0') {
+        free(diff);
+        return -1;  /* no unstaged changes */
+    }
+
+    /*
+     * Step 2: Extract the single-hunk patch covering target_line.
+     */
+    char *patch = git_build_hunk_patch(diff, target_line);
+    free(diff);
+
+    if (!patch) return -1;  /* no hunk covers this line */
+
+    /*
+     * Step 3: Apply the patch to the index.
+     *
+     * `git apply --cached` reads a patch from stdin and applies it to the
+     * index (staging area) without modifying the working tree.
+     *
+     * popen(cmd, "w") gives us a FILE* connected to the command's stdin.
+     * We write the patch, then pclose() waits for git to finish and returns
+     * its exit status.
+     */
+    snprintf(cmd, sizeof(cmd),
+             "git -C '%s' apply --cached", repo_root);
+
+    FILE *fp = popen(cmd, "w");
+    if (!fp) {
+        free(patch);
+        return -1;
+    }
+
+    int patch_len = (int)strlen(patch);
+    fwrite(patch, 1, patch_len, fp);
+    int status = pclose(fp);
+
+    free(patch);
+    return (status == 0) ? 0 : -1;
+}
+
+/* ============================================================================
  * Git status list — for the status panel
  * ============================================================================ */
 

@@ -1983,6 +1983,78 @@ void editor_toggle_git_panel(Editor *ed)
 }
 
 /* ============================================================================
+ * Hunk staging
+ * ============================================================================ */
+
+void editor_stage_hunk(Editor *ed)
+{
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf) return;
+
+    /* Verify we're in a git repo with a tracked, saved file */
+    if (!buf->git_state.repo_root) {
+        editor_set_status(ed, "Not in a git repository.");
+        return;
+    }
+    if (!buf->git_state.is_tracked) {
+        editor_set_status(ed, "File is not tracked by git.");
+        return;
+    }
+    if (!buf->filename) {
+        editor_set_status(ed, "Buffer has no filename — save first.");
+        return;
+    }
+    if (buf->dirty) {
+        editor_set_status(ed, "Unsaved changes — save (Ctrl+S) before staging.");
+        return;
+    }
+
+    /*
+     * Try to stage the hunk at the cursor line.
+     *
+     * git_stage_hunk_at_line() uses `git diff` (unstaged only), so if the
+     * cursor is on a line that is already staged or has no changes, it
+     * will return -1.
+     */
+    int result = git_stage_hunk_at_line(buf->git_state.repo_root,
+                                        buf->filename,
+                                        ed->cursor_row);
+    if (result == 0) {
+        editor_set_status(ed, "Hunk staged at line %d.", ed->cursor_row + 1);
+
+        /*
+         * Refresh the git status panel if it's open, so the user can see
+         * the file's status change (e.g. ' M' → 'M ').
+         */
+        if (ed->show_git_panel && ed->git_status
+                && buf->git_state.repo_root) {
+            git_status_refresh(ed->git_status, buf->git_state.repo_root);
+        }
+
+        /*
+         * Refresh gutter markers and inline diff.
+         *
+         * Note: gutter markers use `git diff HEAD` which compares working
+         * tree to HEAD.  Since staging only changes the index (not HEAD
+         * or the working tree), the gutter markers won't change.  But we
+         * refresh anyway in case the user expects visual feedback.
+         *
+         * The inline diff view WILL change if the user staged all unstaged
+         * changes for a hunk — the diff relative to HEAD stays the same
+         * but the diff used for staging (git diff) would now be empty.
+         */
+        git_refresh(&buf->git_state, buf->filename, buf->num_lines);
+        if (ed->show_inline_diff)
+            refresh_inline_diff(ed);
+
+    } else {
+        editor_set_status(ed,
+            "No unstaged hunk at line %d (already staged or unchanged).",
+            ed->cursor_row + 1);
+    }
+}
+
+/* ============================================================================
  * Inline diff view
  * ============================================================================ */
 
