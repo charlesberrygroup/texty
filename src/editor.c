@@ -1983,6 +1983,80 @@ void editor_toggle_git_panel(Editor *ed)
 }
 
 /* ============================================================================
+ * Git commit
+ * ============================================================================ */
+
+void editor_git_commit(Editor *ed)
+{
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf) return;
+
+    const char *root = buf->git_state.repo_root;
+    if (!root) {
+        editor_set_status(ed, "Not in a git repository.");
+        return;
+    }
+
+    /*
+     * Check if there are staged changes before prompting for a message.
+     * This avoids making the user type a message only to find out there
+     * was nothing to commit.
+     */
+    int has_staged = git_has_staged_changes(root);
+    if (has_staged <= 0) {
+        editor_set_status(ed,
+            "Nothing staged to commit. Use F11 to stage hunks first.");
+        return;
+    }
+
+    /*
+     * Prompt for the commit message.
+     *
+     * display_prompt() draws an input field in the status bar and returns
+     * a heap-allocated string, or NULL if the user pressed Escape.
+     */
+    char *msg = display_prompt(ed, "Commit message: ");
+    if (!msg || msg[0] == '\0') {
+        free(msg);
+        editor_set_status(ed, "Commit cancelled.");
+        return;
+    }
+
+    /* Run the commit */
+    int result = git_commit(root, msg);
+    free(msg);
+
+    if (result != 0) {
+        editor_set_status(ed, "Commit failed (pre-commit hook or git error).");
+        return;
+    }
+
+    editor_set_status(ed, "Committed successfully.");
+
+    /*
+     * HEAD has changed — refresh git state for ALL open buffers.
+     *
+     * After a commit, lines that were changed relative to the OLD HEAD
+     * may now be unchanged relative to the NEW HEAD.  So gutter markers
+     * need to be recalculated for every buffer, not just the current one.
+     */
+    for (int i = 0; i < ed->num_buffers; i++) {
+        Buffer *b = ed->buffers[i];
+        if (b && b->filename) {
+            git_refresh(&b->git_state, b->filename, b->num_lines);
+        }
+    }
+
+    /* Refresh inline diff if it's active */
+    if (ed->show_inline_diff)
+        refresh_inline_diff(ed);
+
+    /* Refresh the git status panel if it's open */
+    if (ed->show_git_panel && ed->git_status && root)
+        git_status_refresh(ed->git_status, root);
+}
+
+/* ============================================================================
  * Hunk staging
  * ============================================================================ */
 

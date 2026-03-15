@@ -598,6 +598,18 @@ void editor_mark_region(Editor *ed);
  */
 void editor_toggle_git_panel(Editor *ed);
 
+/* ---- Git commit ----------------------------------------------------------- */
+
+/**
+ * editor_git_commit — prompt for a message and commit staged changes (F12).
+ *
+ * Checks for staged changes first.  If none are staged, shows a message
+ * directing the user to stage with F11.  On success, refreshes git state
+ * for all open buffers (since HEAD has changed) and updates the status
+ * panel and inline diff view.
+ */
+void editor_git_commit(Editor *ed);
+
 /* ---- Inline diff view ----------------------------------------------------- */
 
 /**

@@ -823,14 +823,25 @@ char *git_build_hunk_patch(const char *diff_text, int target_line)
      */
     int hdr_len  = (int)(file_hdr_end - diff_text);
     int hunk_len = (int)(found_end - found_start);
-    int total    = hdr_len + hunk_len + 1;  /* +1 for null terminator */
+
+    /*
+     * git apply requires the patch to end with a newline.
+     *
+     * run_command() strips trailing newlines from git's output, so if
+     * this is the last hunk in the diff, the final body line won't have
+     * a '\n'.  We detect that and append one so the patch is valid.
+     */
+    int needs_nl = (hunk_len > 0 && found_end[-1] != '\n') ? 1 : 0;
+    int total    = hdr_len + hunk_len + needs_nl + 1;  /* +1 for '\0' */
 
     char *patch = malloc(total);
     if (!patch) return NULL;
 
     memcpy(patch, diff_text, hdr_len);
     memcpy(patch + hdr_len, found_start, hunk_len);
-    patch[hdr_len + hunk_len] = '\0';
+    if (needs_nl)
+        patch[hdr_len + hunk_len] = '\n';
+    patch[total - 1] = '\0';
 
     return patch;
 }
@@ -891,6 +902,72 @@ int git_stage_hunk_at_line(const char *repo_root, const char *filepath,
     int status = pclose(fp);
 
     free(patch);
+    return (status == 0) ? 0 : -1;
+}
+
+/* ============================================================================
+ * Committing
+ * ============================================================================ */
+
+int git_has_staged_changes(const char *repo_root)
+{
+    if (!repo_root || repo_root[0] == '\0') return -1;
+
+    /*
+     * `git diff --cached --quiet` compares the index (staging area) to HEAD.
+     *
+     * Exit code 0 → index matches HEAD, nothing staged.
+     * Exit code 1 → index differs from HEAD, there are staged changes.
+     *
+     * We use popen() + pclose() to capture the exit code.
+     * We must consume any stdout (there shouldn't be any with --quiet,
+     * but it's good practice to drain the pipe before pclose).
+     */
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd),
+             "git -C '%s' diff --cached --quiet 2>/dev/null", repo_root);
+
+    FILE *fp = popen(cmd, "r");
+    if (!fp) return -1;
+
+    /* Drain any output */
+    while (fgetc(fp) != EOF) {}
+
+    int status = pclose(fp);
+
+    /*
+     * pclose() returns the raw waitpid status.
+     * status == 0 → command exited with code 0 → no staged changes.
+     * status != 0 → command exited with non-zero → staged changes exist.
+     */
+    return (status != 0) ? 1 : 0;
+}
+
+int git_commit(const char *repo_root, const char *message)
+{
+    if (!repo_root || !message || message[0] == '\0') return -1;
+
+    /*
+     * `git commit -F -` reads the commit message from stdin.
+     *
+     * This avoids all shell-escaping problems: no matter what characters
+     * are in the user's message (quotes, backticks, dollar signs, etc.),
+     * they are written directly to git's stdin, never interpreted by the
+     * shell.
+     *
+     * popen(cmd, "w") connects our FILE* to the command's stdin.
+     * We write the message, then pclose() waits for git to finish.
+     */
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd),
+             "git -C '%s' commit -F -", repo_root);
+
+    FILE *fp = popen(cmd, "w");
+    if (!fp) return -1;
+
+    fwrite(message, 1, strlen(message), fp);
+
+    int status = pclose(fp);
     return (status == 0) ? 0 : -1;
 }
 

@@ -821,6 +821,47 @@ TEST(test_patch_hunk_with_context)
     ASSERT(p3 == NULL, "line 3 outside hunk");
 }
 
+TEST(test_patch_ends_with_newline)
+{
+    /*
+     * Simulate what run_command() produces: the diff text has its trailing
+     * newline stripped.  The extracted patch must still end with '\n' or
+     * git apply will reject it as "corrupt patch".
+     */
+    const char *diff =
+        "diff --git a/f.c b/f.c\n"
+        "index abc..def 100644\n"
+        "--- a/f.c\n"
+        "+++ b/f.c\n"
+        "@@ -1,1 +1,1 @@\n"
+        "-old line\n"
+        "+new line";   /* <-- no trailing newline, like run_command output */
+
+    char *patch = git_build_hunk_patch(diff, 0);
+    ASSERT(patch != NULL, "patch extracted");
+
+    int len = (int)strlen(patch);
+    ASSERT(len > 0 && patch[len - 1] == '\n',
+           "patch ends with newline");
+
+    free(patch);
+}
+
+/* ============================================================================
+ * Commit helpers — edge cases (no real repo needed)
+ * ============================================================================ */
+
+TEST(test_commit_null_args)
+{
+    /* NULL/empty args should return -1 without crashing */
+    ASSERT(git_has_staged_changes(NULL) == -1,  "NULL repo_root returns -1");
+    ASSERT(git_has_staged_changes("")   == -1,  "empty repo_root returns -1");
+
+    ASSERT(git_commit(NULL, "msg")  == -1, "NULL repo_root returns -1");
+    ASSERT(git_commit("/tmp", NULL) == -1, "NULL message returns -1");
+    ASSERT(git_commit("/tmp", "")   == -1, "empty message returns -1");
+}
+
 /* ============================================================================
  * main
  * ============================================================================ */
@@ -861,6 +902,10 @@ int main(void)
     RUN(test_patch_multi_line_hunk);
     RUN(test_patch_deletion_hunk);
     RUN(test_patch_hunk_with_context);
+    RUN(test_patch_ends_with_newline);
+
+    /* Commit edge cases */
+    RUN(test_commit_null_args);
 
     TEST_SUMMARY();
 }

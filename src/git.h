@@ -249,6 +249,30 @@ char *git_build_hunk_patch(const char *diff_text, int target_line);
 int git_stage_hunk_at_line(const char *repo_root, const char *filepath,
                            int target_line);
 
+/* ---- Committing ----------------------------------------------------------- */
+
+/**
+ * git_has_staged_changes — check if there are staged changes in the repo.
+ *
+ * Runs `git diff --cached --quiet`.  This command exits with code 0 if
+ * the index matches HEAD (nothing staged), and code 1 if there are
+ * staged changes ready to commit.
+ *
+ * Returns 1 if there ARE staged changes, 0 if not, -1 on error.
+ */
+int git_has_staged_changes(const char *repo_root);
+
+/**
+ * git_commit — create a commit with the given message.
+ *
+ * Pipes the message to `git commit -F -` which reads the commit message
+ * from stdin.  This avoids shell-escaping issues with quotes and special
+ * characters in the message.
+ *
+ * Returns 0 on success, -1 on error (nothing staged, hook failed, etc.).
+ */
+int git_commit(const char *repo_root, const char *message);
+
 /* ---- Git status list (for the status panel) ------------------------------- */
 
 /** Maximum number of entries in a git status listing. */

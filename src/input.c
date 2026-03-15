@@ -729,6 +729,10 @@ void input_process_key(struct Editor *ed)
             editor_stage_hunk(ed);
             break;
 
+        case KEY_F(12):        /* F12 — Git commit */
+            editor_git_commit(ed);
+            break;
+
         case CTRL('b'):        /* Ctrl+B — Toggle file explorer panel */
             /*
              * editor_toggle_filetree() handles all the logic:
