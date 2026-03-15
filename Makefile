@@ -108,7 +108,7 @@ TESTOBJDIR = $(OBJDIR)/tests
 # display_stub.c provides fake implementations of display functions that
 # editor.c calls (e.g. display_prompt), so we can link without ncurses.
 TEST_DEPS = $(OBJDIR)/buffer.o $(OBJDIR)/undo.o $(OBJDIR)/editor.o \
-            $(OBJDIR)/syntax.o $(OBJDIR)/filetree.o \
+            $(OBJDIR)/syntax.o $(OBJDIR)/filetree.o $(OBJDIR)/pane.o \
             $(TESTDIR)/display_stub.c
 
 # One binary per test source file

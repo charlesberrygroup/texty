@@ -218,7 +218,7 @@ static void draw_tab_bar(struct Editor *ed)
 
     for (int i = 0; i < ed->num_buffers; i++) {
         Buffer     *buf  = ed->buffers[i];
-        int         active = (i == ed->current_buffer);
+        int         active = (i == ed->active_pane->buffer_index);
 
         /*
          * Build the tab label: " filename [+] " for dirty buffers,
@@ -388,7 +388,7 @@ static int syntax_token_attr(const SyntaxToken *tokens, int col)
  *   >  selection  >  cursor-row reverse-video  >  syntax color  >  normal
  *
  * bm_row / bm_col  — position of the matching bracket (-1 if none).
- *   The cursor bracket itself is at (ed->cursor_row, ed->cursor_col).
+ *   The cursor bracket itself is at (ed->active_pane->cursor_row, ed->active_pane->cursor_col).
  *   Both positions get CPAIR_BRACKET when bracket matching is active.
  *
  * tokens — per-character SyntaxToken array from syntax_highlight_line(),
@@ -407,15 +407,15 @@ static void draw_line_with_search(int buf_row,
 {
     const char *query      = ed->search_query;
     int         qlen       = (int)strlen(query);
-    int         match_row  = ed->search_match_row;
-    int         match_col  = ed->search_match_col;
+    int         match_row  = ed->active_pane->search_match_row;
+    int         match_col  = ed->active_pane->search_match_col;
 
     for (int i = 0; i < draw_len; i++) {
         int buf_col = view_col + i;
 
         int attr;
 
-        if ((buf_row == ed->cursor_row && buf_col == ed->cursor_col
+        if ((buf_row == ed->active_pane->cursor_row && buf_col == ed->active_pane->cursor_col
                 && buffer_line_len(editor_current_buffer(ed), buf_row) > buf_col
                 && bm_col >= 0)
             || (buf_row == bm_row && buf_col == bm_col)) {
@@ -696,12 +696,12 @@ static void draw_editor_area(struct Editor *ed)
      *
      * If no selection is active, sel_active is 0 and we skip all of this.
      */
-    int sel_active = ed->sel_active;
+    int sel_active = ed->active_pane->sel_active;
     int sel_sr = 0, sel_sc = 0, sel_er = 0, sel_ec = 0;
 
     if (sel_active) {
-        int ar = ed->sel_anchor_row, ac = ed->sel_anchor_col;
-        int cr = ed->cursor_row,     cc = ed->cursor_col;
+        int ar = ed->active_pane->sel_anchor_row, ac = ed->active_pane->sel_anchor_col;
+        int cr = ed->active_pane->cursor_row,     cc = ed->active_pane->cursor_col;
 
         if (ar < cr || (ar == cr && ac <= cc)) {
             sel_sr = ar; sel_sc = ac;
@@ -753,7 +753,7 @@ static void draw_editor_area(struct Editor *ed)
     int syn_ml_state = 0;
     if (syn_lang != LANG_NONE) {
         SyntaxToken syn_tmp[SYNTAX_MAX_LINE];
-        for (int r = 0; r < ed->view_row && r < buf->num_lines; r++) {
+        for (int r = 0; r < ed->active_pane->view_row && r < buf->num_lines; r++) {
             syn_ml_state = syntax_highlight_line(syn_lang,
                                                   buffer_get_line(buf, r),
                                                   buffer_line_len(buf, r),
@@ -775,7 +775,7 @@ static void draw_editor_area(struct Editor *ed)
          *   segment 1: columns [text_cols     .. 2*text_cols)
          *   segment k: columns [k*text_cols   .. (k+1)*text_cols)
          */
-        int buf_row = ed->view_row;
+        int buf_row = ed->active_pane->view_row;
         int segment = 0;           /* which wrapped segment of buf_row */
 
         /*
@@ -796,8 +796,8 @@ static void draw_editor_area(struct Editor *ed)
              * Before the first segment of the region start row, draw a
              * horizontal line ┌──────────┐ across the full editor width.
              */
-            if (ed->region_active && segment == 0
-                    && buf_row == ed->region_start_row) {
+            if (ed->active_pane->region_active && segment == 0
+                    && buf_row == ed->active_pane->region_start_row) {
                 draw_region_hborder(screen_row, panel_w, ed, 1);
                 screen_row++;
                 if (screen_row >= text_rows) break;
@@ -836,7 +836,7 @@ static void draw_editor_area(struct Editor *ed)
                 syn_tokens = NULL;
             }
 
-            int is_cursor_row = (buf_row == ed->cursor_row);
+            int is_cursor_row = (buf_row == ed->active_pane->cursor_row);
             int row_attr      = A_NORMAL;  /* no full-line highlight */
 
             /*
@@ -844,9 +844,9 @@ static void draw_editor_area(struct Editor *ed)
              * marked by the user with Ctrl+U.  Used to draw a red box border
              * in the gutter and at the right edge of each region row.
              */
-            int in_region = ed->region_active
-                            && buf_row >= ed->region_start_row
-                            && buf_row <= ed->region_end_row;
+            int in_region = ed->active_pane->region_active
+                            && buf_row >= ed->active_pane->region_start_row
+                            && buf_row <= ed->active_pane->region_end_row;
 
             /* ---- Gutter ---- */
             if (in_region) {
@@ -907,7 +907,7 @@ static void draw_editor_area(struct Editor *ed)
              */
             int need_perchar  = search_active
                                 || (bm_col >= 0 && buf_row == bm_row)
-                                || (bm_col >= 0 && buf_row == ed->cursor_row)
+                                || (bm_col >= 0 && buf_row == ed->active_pane->cursor_row)
                                 || (syn_tokens != NULL);
 
             if (need_perchar && draw_len > 0) {
@@ -992,8 +992,8 @@ static void draw_editor_area(struct Editor *ed)
             }
 
             /* ---- Advance (buf_row, segment) ---- */
-            int was_region_end = (ed->region_active
-                                  && buf_row == ed->region_end_row);
+            int was_region_end = (ed->active_pane->region_active
+                                  && buf_row == ed->active_pane->region_end_row);
             segment++;
             int finished_line = (start_col + text_cols >= line_len);
             if (finished_line) {
@@ -1029,7 +1029,7 @@ static void draw_editor_area(struct Editor *ed)
          */
         SyntaxToken syn_line_tokens[SYNTAX_MAX_LINE];
 
-        int buf_row = ed->view_row;
+        int buf_row = ed->active_pane->view_row;
         int screen_row = 0;
         while (screen_row < text_rows) {
             /*
@@ -1037,7 +1037,7 @@ static void draw_editor_area(struct Editor *ed)
              * Before the region start row, draw a horizontal line
              * ┌──────────┐ across the full editor width.
              */
-            if (ed->region_active && buf_row == ed->region_start_row) {
+            if (ed->active_pane->region_active && buf_row == ed->active_pane->region_start_row) {
                 draw_region_hborder(screen_row, panel_w, ed, 1);
                 screen_row++;
                 if (screen_row >= text_rows) break;
@@ -1080,14 +1080,14 @@ static void draw_editor_area(struct Editor *ed)
             }
 
             /* ---- Gutter: line number (or region border) --------------------- */
-            int is_cursor_row = (buf_row == ed->cursor_row);
+            int is_cursor_row = (buf_row == ed->active_pane->cursor_row);
 
             /*
              * in_region — true if this row falls inside the user's marked region.
              */
-            int in_region = ed->region_active
-                            && buf_row >= ed->region_start_row
-                            && buf_row <= ed->region_end_row;
+            int in_region = ed->active_pane->region_active
+                            && buf_row >= ed->active_pane->region_start_row
+                            && buf_row <= ed->active_pane->region_end_row;
 
             if (in_region) {
                 /*
@@ -1150,7 +1150,7 @@ static void draw_editor_area(struct Editor *ed)
 
             const char *line_text = buffer_get_line(buf, buf_row);
             int         line_len  = buffer_line_len(buf, buf_row);
-            int         view_col  = ed->view_col;
+            int         view_col  = ed->active_pane->view_col;
 
             /* Clamp view_col so we don't go past end of line */
             int start_col = (view_col <= line_len) ? view_col : line_len;
@@ -1184,7 +1184,7 @@ static void draw_editor_area(struct Editor *ed)
             int search_active2 = (ed->search_query[0] != '\0');
             int need_perchar2  = search_active2
                                  || (bm_col >= 0 && buf_row == bm_row)
-                                 || (bm_col >= 0 && buf_row == ed->cursor_row)
+                                 || (bm_col >= 0 && buf_row == ed->active_pane->cursor_row)
                                  || (syn_tokens != NULL);
 
             if (need_perchar2) {
@@ -1264,8 +1264,8 @@ static void draw_editor_area(struct Editor *ed)
             }
 
             /* ---- Advance ---- */
-            int was_region_end = (ed->region_active
-                                  && buf_row == ed->region_end_row);
+            int was_region_end = (ed->active_pane->region_active
+                                  && buf_row == ed->active_pane->region_end_row);
             buf_row++;
             screen_row++;
 
@@ -1307,8 +1307,8 @@ static void draw_status_bar(struct Editor *ed)
     /* Right side: cursor position */
     char right[64];
     snprintf(right, sizeof(right), "Ln %d, Col %d  ",
-             ed->cursor_row + 1,
-             ed->cursor_col + 1);
+             ed->active_pane->cursor_row + 1,
+             ed->active_pane->cursor_col + 1);
 
     /* Print left section */
     printw("%-*s", ed->term_cols - (int)strlen(right), left);
@@ -1411,16 +1411,16 @@ void display_render(struct Editor *ed)
         int sr = 0;
         Buffer *buf_wr = editor_current_buffer(ed);
         if (buf_wr) {
-            for (int r = ed->view_row; r < ed->cursor_row; r++) {
+            for (int r = ed->active_pane->view_row; r < ed->active_pane->cursor_row; r++) {
                 int len = buffer_line_len(buf_wr, r);
                 sr += line_screen_rows_d(len, text_cols_wr);
             }
         }
         /* Add the sub-row within the cursor line */
-        sr += ed->cursor_col / text_cols_wr;
+        sr += ed->active_pane->cursor_col / text_cols_wr;
 
         screen_row = TAB_BAR_HEIGHT + sr;
-        screen_col = panel_w + GUTTER_WIDTH + (ed->cursor_col % text_cols_wr);
+        screen_col = panel_w + GUTTER_WIDTH + (ed->active_pane->cursor_col % text_cols_wr);
 
         /*
          * Adjust for region border rows that consume screen space.
@@ -1428,10 +1428,10 @@ void display_render(struct Editor *ed)
          * cursor is at or past that row, shift down by 1.  Similarly
          * the bottom border is drawn after region_end_row.
          */
-        if (ed->region_active) {
-            if (ed->cursor_row >= ed->region_start_row)
+        if (ed->active_pane->region_active) {
+            if (ed->active_pane->cursor_row >= ed->active_pane->region_start_row)
                 screen_row++;          /* top border pushed us down */
-            if (ed->cursor_row > ed->region_end_row)
+            if (ed->active_pane->cursor_row > ed->active_pane->region_end_row)
                 screen_row++;          /* bottom border pushed us down */
         }
 
@@ -1440,14 +1440,14 @@ void display_render(struct Editor *ed)
          * Case B (normal mode): straightforward linear mapping.
          * Add panel_w so the cursor lands in the editor area, not in the panel.
          */
-        screen_col = panel_w + GUTTER_WIDTH + (ed->cursor_col - ed->view_col);
-        screen_row = TAB_BAR_HEIGHT + (ed->cursor_row - ed->view_row);
+        screen_col = panel_w + GUTTER_WIDTH + (ed->active_pane->cursor_col - ed->active_pane->view_col);
+        screen_row = TAB_BAR_HEIGHT + (ed->active_pane->cursor_row - ed->active_pane->view_row);
 
         /* Adjust for region border rows (same logic as word-wrap case) */
-        if (ed->region_active) {
-            if (ed->cursor_row >= ed->region_start_row)
+        if (ed->active_pane->region_active) {
+            if (ed->active_pane->cursor_row >= ed->active_pane->region_start_row)
                 screen_row++;
-            if (ed->cursor_row > ed->region_end_row)
+            if (ed->active_pane->cursor_row > ed->active_pane->region_end_row)
                 screen_row++;
         }
     }

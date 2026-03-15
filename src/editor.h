@@ -18,6 +18,7 @@
 #define EDITOR_H
 
 #include "buffer.h"
+#include "pane.h"
 #include <stdarg.h>
 
 /*
@@ -47,20 +48,14 @@ struct FileTree;
 /**
  * Editor — the top-level application state.
  *
- * Cursor fields
- * -------------
- *   cursor_row     Current line (0-based).
- *   cursor_col     Current column (0-based, clamped to actual line length).
- *   desired_col    The column the user is "aiming for" during vertical movement.
- *                  When you press Down from column 20 onto a line of only 5
- *                  characters, desired_col stays at 20.  If you then move down
- *                  onto a line of 30 characters, the cursor snaps back to 20.
+ * Per-viewport state (cursor, viewport, selection, region) has been moved
+ * into the Pane struct (see pane.h).  The Editor owns a tree of panes and
+ * a pointer to the currently active one (active_pane).
  *
- * Viewport fields
- * ---------------
- *   view_row / view_col   The top-left corner of the visible area.
- *                         The display renders lines [view_row .. view_row+rows)
- *                         and columns [view_col .. view_col+cols).
+ * To access the cursor:   ed->active_pane->cursor_row / cursor_col
+ * To access the viewport:  ed->active_pane->view_row / view_col
+ * To access the buffer:    ed->buffers[ed->active_pane->buffer_index]
+ *                          or editor_current_buffer(ed)
  *
  * Terminal size
  * -------------
@@ -68,19 +63,26 @@ struct FileTree;
  *                           every terminal resize event (SIGWINCH).
  */
 typedef struct Editor {
-    /* Open buffers */
+    /* Open buffers — shared across all panes */
     Buffer  *buffers[EDITOR_MAX_BUFFERS];
     int      num_buffers;
-    int      current_buffer;    /* Index into buffers[] */
 
-    /* Cursor */
-    int      cursor_row;
-    int      cursor_col;
-    int      desired_col;       /* See note above */
-
-    /* Viewport */
-    int      view_row;
-    int      view_col;
+    /* ---- Pane tree --------------------------------------------------------
+     *
+     * The pane system replaces the old single-viewport model.  All per-viewport
+     * state (cursor, viewport, selection, region) lives in the Pane struct
+     * (see pane.h).  The Editor owns a tree of PaneNodes whose leaves are the
+     * actual Pane viewports.
+     *
+     * active_pane always points to the pane that currently receives keyboard
+     * input.  In the initial single-pane state, it's the only pane in the tree.
+     *
+     * To access the current cursor position:  ed->active_pane->cursor_row
+     * To access the current buffer index:     ed->active_pane->buffer_index
+     */
+    PaneNode *pane_root;       /* root of the split-pane binary tree */
+    Pane     *active_pane;     /* currently focused pane (always a leaf) */
+    int       num_panes;       /* total number of leaf panes */
 
     /* Terminal size (updated by display_update_size) */
     int      term_rows;
@@ -114,22 +116,7 @@ typedef struct Editor {
     int      word_wrap;
 
     /*
-     * Selection state
-     * ---------------
-     * A selection is active when sel_active != 0.  It spans from the anchor
-     * point to the current cursor position.  The anchor is set when the user
-     * starts a Shift+Arrow movement.  The cursor moves normally; the anchor
-     * stays fixed until the selection is cleared.
-     *
-     * Either endpoint can be the "earlier" one — display.c normalizes them.
-     */
-    int      sel_active;
-    int      sel_anchor_row;
-    int      sel_anchor_col;
-
-    /*
-     * Internal clipboard
-     * ------------------
+     * Internal clipboard — shared across all panes.
      * A heap-allocated string holding the most recently copied or cut text.
      * May contain '\n' characters for multi-line content.
      * NULL if nothing has been copied yet.
@@ -137,19 +124,13 @@ typedef struct Editor {
     char    *clipboard;
 
     /*
-     * Search state
-     * ------------
-     * search_query     The current search string.  Empty string means no
-     *                  active search (highlights are off).
+     * Search query — shared across all panes.
+     * The query string is global so all panes highlight the same matches.
+     * Each pane has its own search_match_row/col (the "current match" cursor).
      *
-     * search_match_row / search_match_col
-     *                  Position of the match that the cursor jumped to most
-     *                  recently (the one shown with the green highlight).
-     *                  -1 / -1 when no match has been found yet.
+     * Empty string means no active search (highlights are off).
      */
     char     search_query[256];
-    int      search_match_row;
-    int      search_match_col;
 
     /* ---- File explorer ---------------------------------------------------- */
 
@@ -159,66 +140,20 @@ typedef struct Editor {
      * NULL means the tree has not been created yet (panel has never been opened).
      * When non-NULL, the FileTree is heap-allocated and must be freed with
      * filetree_free() in editor_cleanup().
-     *
-     * We use a pointer (not a full struct) here because FileTree is large
-     * (~2 MB) and embedding it directly in every Editor would be wasteful when
-     * the user never opens the file panel.
      */
     struct FileTree *filetree;
 
-    /*
-     * show_filetree — non-zero when the file explorer panel is visible.
-     *
-     * The panel occupies the left FILETREE_WIDTH columns of the screen.
-     * Toggled with Ctrl+B.
-     */
+    /** show_filetree — non-zero when the file explorer panel is visible. */
     int      show_filetree;
 
-    /*
-     * filetree_focus — non-zero when keyboard input should go to the file tree.
-     *
-     * When 1: arrow keys move the tree cursor, Enter opens/expands items.
-     * When 0: keyboard input goes to the text editor as normal.
-     * Press Escape to return focus to the editor.
-     */
+    /** filetree_focus — non-zero when keyboard input goes to the file tree. */
     int      filetree_focus;
 
-    /*
-     * filetree_cursor — index into ft->entries[] of the highlighted row.
-     *
-     * This is what the user moves with Up/Down arrows while the tree has focus.
-     */
+    /** filetree_cursor — index into ft->entries[] of the highlighted row. */
     int      filetree_cursor;
 
-    /*
-     * filetree_scroll — index of the first entry that is visible on screen.
-     *
-     * When the user scrolls past the visible area, this value is adjusted
-     * by draw_filetree_panel() so the cursor stays in view.
-     */
+    /** filetree_scroll — first visible entry in the file explorer. */
     int      filetree_scroll;
-
-    /* ---- Region highlight ------------------------------------------------- */
-
-    /*
-     * region_active — non-zero when a region box is being displayed.
-     *
-     * Set by Ctrl+U when text is selected (captures the selected row range).
-     * Pressing Ctrl+U again with no active selection clears it.
-     *
-     * The region is a pure display feature: text is not changed, and the
-     * region is drawn on top of whatever is in the buffer.
-     */
-    int      region_active;
-
-    /*
-     * region_start_row / region_end_row — first and last buffer rows of
-     * the highlighted region, inclusive, in 0-based buffer coordinates.
-     *
-     * Only meaningful when region_active is non-zero.
-     */
-    int      region_start_row;
-    int      region_end_row;
 } Editor;
 
 /* ---- Lifecycle ------------------------------------------------------------ */
