@@ -4,7 +4,7 @@ A cross-platform terminal IDE written in C, built in phases.
 
 ---
 
-## Phase 1 — Core Editor (MVP) ✅ IN PROGRESS
+## Phase 1 — Core Editor (MVP) ✅
 
 The goal of Phase 1 is a working, usable text editor with clean architecture
 that all future phases will build on.
@@ -33,7 +33,7 @@ that all future phases will build on.
 
 ---
 
-## Phase 2 — Editor Enhancements
+## Phase 2 — Editor Enhancements ✅
 
 ### Undo / Redo
 - [x] Undo last action (Ctrl+Z)
@@ -62,36 +62,36 @@ that all future phases will build on.
 - [x] Tab bar at the top showing open buffers
 
 ### Syntax Highlighting
-- [ ] Language detection by file extension
-- [ ] C / C++ highlighting (keywords, types, strings, comments, preprocessor)
-- [ ] Python highlighting
-- [ ] JavaScript / TypeScript highlighting
-- [ ] Rust highlighting
-- [ ] Go highlighting
-- [ ] JSON highlighting
-- [ ] Markdown highlighting
-- [ ] Shell script highlighting
-- [ ] Makefile highlighting
+- [x] Language detection by file extension
+- [x] C / C++ highlighting (keywords, types, strings, comments, preprocessor)
+- [x] Python highlighting
+- [x] JavaScript / TypeScript highlighting
+- [x] Rust highlighting
+- [x] Go highlighting
+- [x] JSON highlighting
+- [x] Markdown highlighting
+- [x] Shell script highlighting
+- [x] Makefile highlighting
 
 ### Smart Editing
-- [ ] Auto-indent on newline (matches current line's indentation)
-- [ ] Tab key inserts spaces (configurable tab width)
-- [ ] Show/hide whitespace characters
-- [ ] Word-wrap toggle
-- [ ] Jump to line (Ctrl+G)
-- [ ] Bracket matching highlight
-- [ ] Auto-close brackets and quotes
+- [x] Auto-indent on newline (matches current line's indentation)
+- [x] Tab key inserts spaces (configurable tab width)
+- [x] Show/hide whitespace characters
+- [x] Word-wrap toggle
+- [x] Jump to line (Ctrl+G)
+- [x] Bracket matching highlight
+- [x] Auto-close brackets and quotes
 
 ---
 
-## Phase 3 — IDE Features
+## Phase 3 — IDE Features ✅ IN PROGRESS
 
 ### File Explorer
-- [ ] Side panel showing directory tree
-- [ ] Toggle file explorer (Ctrl+B)
-- [ ] Open file from tree with Enter
-- [ ] Create / rename / delete files and directories
-- [ ] Expand/collapse directories
+- [x] Side panel showing directory tree
+- [x] Toggle file explorer (Ctrl+B)
+- [x] Open file from tree with Enter
+- [x] Create / rename / delete files and directories
+- [x] Expand/collapse directories
 
 ### Split Panes
 - [ ] Split editor horizontally (Ctrl+Shift+-)
