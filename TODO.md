@@ -134,9 +134,9 @@ that all future phases will build on.
 - [ ] Signature help for function calls
 
 ### Git Integration
-- [ ] Show modified/added/deleted lines in gutter
-- [ ] Git status panel
-- [ ] Inline diff view
+- [x] Show modified/added/deleted lines in gutter
+- [x] Git status panel
+- [x] Inline diff view
 - [ ] Stage hunks
 - [ ] Commit from editor
 

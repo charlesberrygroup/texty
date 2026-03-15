@@ -421,6 +421,272 @@ int git_refresh(GitState *gs, const char *filepath, int total_lines)
 }
 
 /* ============================================================================
+ * Inline diff — chunk extraction
+ * ============================================================================ */
+
+/*
+ * flush_pending_chunk — helper to save accumulated old lines as a chunk.
+ *
+ * When we encounter context lines or the end of a hunk while we have
+ * pending old (removed) lines, we "flush" them into a new GitDiffChunk.
+ *
+ * Parameters:
+ *   dc             — the output collection to append to.
+ *   old_lines      — array of old line strings (ownership transferred).
+ *   old_count      — number of old lines.
+ *   before_line    — 0-based buffer line where phantom lines appear.
+ *
+ * Returns 0 on success, -1 on allocation failure.
+ * On success, old_lines ownership moves to the chunk (do NOT free).
+ * On failure, old_lines are freed here.
+ */
+static int flush_pending_chunk(GitDiffChunks *dc, char **old_lines,
+                               int old_count, int before_line)
+{
+    if (old_count == 0) {
+        free(old_lines);
+        return 0;
+    }
+
+    /* Grow the chunks array if needed */
+    if (dc->count >= dc->capacity) {
+        int new_cap = dc->capacity == 0 ? 8 : dc->capacity * 2;
+        GitDiffChunk *tmp = realloc(dc->chunks, new_cap * sizeof(GitDiffChunk));
+        if (!tmp) {
+            /* Allocation failed — clean up the old lines */
+            for (int i = 0; i < old_count; i++)
+                free(old_lines[i]);
+            free(old_lines);
+            return -1;
+        }
+        dc->chunks   = tmp;
+        dc->capacity = new_cap;
+    }
+
+    GitDiffChunk *c = &dc->chunks[dc->count];
+    c->before_line  = before_line;
+    c->old_lines    = old_lines;
+    c->old_count    = old_count;
+    dc->count++;
+
+    return 0;
+}
+
+void git_diff_chunks_free(GitDiffChunks *dc)
+{
+    if (!dc) return;
+
+    for (int i = 0; i < dc->count; i++) {
+        GitDiffChunk *c = &dc->chunks[i];
+        for (int j = 0; j < c->old_count; j++)
+            free(c->old_lines[j]);
+        free(c->old_lines);
+    }
+    free(dc->chunks);
+
+    dc->chunks   = NULL;
+    dc->count    = 0;
+    dc->capacity = 0;
+}
+
+/*
+ * git_extract_chunks — parse unified diff text into positioned chunks.
+ *
+ * Algorithm:
+ *   For each hunk header (@@ ... @@):
+ *     - Track `new_line` (0-based position in the current file).
+ *     - Walk through the hunk body:
+ *       - Context (' '): flush any pending old lines, advance new_line.
+ *       - Removed ('-'): accumulate into the pending old lines array.
+ *                         Record the position (new_line) of the first '-'.
+ *       - Added   ('+'): advance new_line (these exist in the new file).
+ *     - At end of hunk: flush remaining pending old lines.
+ *
+ * This produces one chunk per contiguous block of '-' lines within each
+ * hunk.  Each chunk's `before_line` is the new_line position at the start
+ * of the removal block — which is the exact buffer line the phantom lines
+ * should appear above.
+ */
+int git_extract_chunks(GitDiffChunks *dc, const char *diff_text)
+{
+    if (!dc) return -1;
+
+    /* Clear any existing data */
+    git_diff_chunks_free(dc);
+
+    if (!diff_text || diff_text[0] == '\0') return 0;
+
+    const char *p = diff_text;
+
+    while (*p) {
+        /* ---- Find the next hunk header (@@ ... @@) ---- */
+        if (p[0] != '@' || p[1] != '@') {
+            while (*p && *p != '\n') p++;
+            if (*p == '\n') p++;
+            continue;
+        }
+
+        /* ---- Parse hunk header: @@ -old_start,old_count +new_start,new_count @@ ---- */
+        const char *plus = strchr(p, '+');
+        if (!plus) break;
+
+        int new_start = 0;
+        if (sscanf(plus + 1, "%d", &new_start) < 1)
+            break;
+
+        /* Convert 1-based to 0-based */
+        int new_line = new_start - 1;
+        if (new_line < 0) new_line = 0;
+
+        /* Skip past the @@ line */
+        while (*p && *p != '\n') p++;
+        if (*p == '\n') p++;
+
+        /* ---- Walk the hunk body ---- */
+
+        /*
+         * pending_lines  — array of old line strings being accumulated.
+         * pending_count  — number of entries in pending_lines.
+         * pending_cap    — allocated capacity of pending_lines.
+         * pending_pos    — the new_line value when the first '-' was seen.
+         *                  This becomes the chunk's before_line.
+         */
+        char **pending_lines = NULL;
+        int    pending_count = 0;
+        int    pending_cap   = 0;
+        int    pending_pos   = new_line;
+
+        while (*p && *p != '@') {
+            char prefix = *p;
+
+            /* Extract the line content (everything after the prefix char) */
+            const char *line_start = p + 1;
+            while (*p && *p != '\n') p++;
+            int line_len = (int)(p - line_start);
+            if (*p == '\n') p++;
+
+            if (prefix == ' ') {
+                /*
+                 * Context line — flush any pending old lines as a chunk,
+                 * then advance new_line (this line exists in the new file).
+                 */
+                if (pending_count > 0) {
+                    flush_pending_chunk(dc, pending_lines,
+                                        pending_count, pending_pos);
+                    pending_lines = NULL;
+                    pending_count = 0;
+                    pending_cap   = 0;
+                }
+                new_line++;
+                pending_pos = new_line;
+
+            } else if (prefix == '-') {
+                /*
+                 * Removed line — accumulate it in the pending array.
+                 * If this is the first '-' in a new group, pending_pos
+                 * is already set to the current new_line.
+                 */
+                if (pending_count == 0)
+                    pending_pos = new_line;
+
+                /* Grow the array if needed */
+                if (pending_count >= pending_cap) {
+                    int new_cap = pending_cap == 0 ? 8 : pending_cap * 2;
+                    char **tmp = realloc(pending_lines,
+                                         new_cap * sizeof(char *));
+                    if (!tmp) {
+                        /* Allocation failure — clean up and bail */
+                        for (int i = 0; i < pending_count; i++)
+                            free(pending_lines[i]);
+                        free(pending_lines);
+                        return -1;
+                    }
+                    pending_lines = tmp;
+                    pending_cap   = new_cap;
+                }
+
+                /*
+                 * Copy the line content (without the '-' prefix).
+                 * malloc line_len + 1 for the null terminator.
+                 */
+                char *copy = malloc(line_len + 1);
+                if (copy) {
+                    memcpy(copy, line_start, line_len);
+                    copy[line_len] = '\0';
+                } else {
+                    copy = strdup("");  /* fallback on OOM */
+                }
+                pending_lines[pending_count++] = copy;
+
+                /* Don't advance new_line — this line doesn't exist in new file */
+
+            } else if (prefix == '+') {
+                /*
+                 * Added line — exists in the new file but not in HEAD.
+                 * Advance new_line.  Do NOT flush pending lines here,
+                 * because '+' lines following '-' lines represent
+                 * modifications and the old lines should appear above
+                 * the first modified line (which is at pending_pos).
+                 */
+                new_line++;
+
+            } else if (prefix == '\\') {
+                /* "\ No newline at end of file" — skip */
+
+            } else {
+                /* Unknown prefix — end of hunk body */
+                break;
+            }
+        }
+
+        /* Flush any remaining pending old lines at end of hunk */
+        if (pending_count > 0) {
+            flush_pending_chunk(dc, pending_lines, pending_count, pending_pos);
+        } else {
+            free(pending_lines);
+        }
+    }
+
+    return 0;
+}
+
+char *git_get_diff_text(const char *repo_root, const char *filepath)
+{
+    if (!repo_root || !filepath) return NULL;
+
+    /*
+     * Build the git diff command.
+     *
+     * We use the absolute filepath to avoid issues with relative paths
+     * and the -C flag to run git from the repo root directory.
+     *
+     * `git diff HEAD -- <file>` compares the working tree version of the
+     * file to the last commit (HEAD), showing both staged and unstaged
+     * changes.  This matches VS Code's inline diff behavior.
+     */
+    char cmd[4096];
+    snprintf(cmd, sizeof(cmd),
+             "git -C '%s' diff HEAD -- '%s' 2>/dev/null",
+             repo_root, filepath);
+
+    return run_command(cmd);
+}
+
+int git_phantom_lines_in_range(const GitDiffChunks *dc,
+                               int from_line, int to_line)
+{
+    if (!dc || !dc->chunks) return 0;
+
+    int total = 0;
+    for (int i = 0; i < dc->count; i++) {
+        int bl = dc->chunks[i].before_line;
+        if (bl >= from_line && bl < to_line)
+            total += dc->chunks[i].old_count;
+    }
+    return total;
+}
+
+/* ============================================================================
  * Git status list — for the status panel
  * ============================================================================ */
 

@@ -115,6 +115,9 @@ struct Editor;
 /** CPAIR_GIT_PANEL_CURSOR — highlighted entry in the git panel (black on white). */
 #define CPAIR_GIT_PANEL_CURSOR 25
 
+/** CPAIR_GIT_OLD_LINE — red text for phantom (deleted/old) lines in inline diff. */
+#define CPAIR_GIT_OLD_LINE     26
+
 /* ---- Functions ------------------------------------------------------------ */
 
 /**

@@ -165,6 +165,9 @@ void display_init(void)
 
         /* Git status panel */
         init_pair(CPAIR_GIT_PANEL_CURSOR, COLOR_BLACK, COLOR_WHITE);
+
+        /* Inline diff: phantom (old/deleted) lines shown in red */
+        init_pair(CPAIR_GIT_OLD_LINE, COLOR_RED, -1);
     }
 }
 
@@ -719,6 +722,42 @@ static void draw_git_marker(const GitState *gs, int buf_row)
 }
 
 /*
+ * draw_phantom_line — render one "old" line from HEAD in the inline diff view.
+ *
+ * Phantom lines are read-only lines from the HEAD version of the file that
+ * were deleted or replaced.  They appear in red with a "  -  " gutter marker
+ * so the user can see what was removed.
+ *
+ * `old_line`   — the text of the old line (from git diff).
+ * `text_cols`  — number of columns available for text content.
+ * `show_ws`    — whether to render spaces as visible dots.
+ */
+static void draw_phantom_line(const char *old_line, int text_cols, int show_ws)
+{
+    /*
+     * Gutter: "  -  " — 5 chars (GUTTER_WIDTH).
+     * The '-' in the middle visually indicates this is a removed line,
+     * similar to unified diff output.  Rendered in red.
+     */
+    attron(COLOR_PAIR(CPAIR_GIT_OLD_LINE));
+    printw("  -  ");
+
+    /* Draw the old line text, truncated to the visible text width */
+    if (old_line) {
+        int len = (int)strlen(old_line);
+        if (len > text_cols) len = text_cols;
+        for (int i = 0; i < len; i++) {
+            if (show_ws && old_line[i] == ' ')
+                addch(ACS_BULLET);   /* visible dot for spaces */
+            else
+                addch(old_line[i]);
+        }
+    }
+    clrtoeol();
+    attroff(COLOR_PAIR(CPAIR_GIT_OLD_LINE));
+}
+
+/*
  * draw_git_panel — render the git status panel on the right side of the screen.
  *
  * Layout (mirrors the file explorer panel pattern):
@@ -925,6 +964,15 @@ static void draw_editor_area(struct Editor *ed)
         int buf_row = ed->view_row;
         int segment = 0;           /* which wrapped segment of buf_row */
 
+        /* Inline diff chunk index for word-wrap path (same pattern as no-wrap) */
+        int chunk_idx_wr = 0;
+        if (ed->show_inline_diff) {
+            while (chunk_idx_wr < ed->inline_diff.count
+                   && ed->inline_diff.chunks[chunk_idx_wr].before_line
+                      < ed->view_row)
+                chunk_idx_wr++;
+        }
+
         /*
          * syn_line_tokens — token array for the current buffer line.
          * Declared outside the loop so it persists across screen rows that
@@ -947,6 +995,29 @@ static void draw_editor_area(struct Editor *ed)
                     && buf_row == ed->region_start_row) {
                 draw_region_hborder(screen_row, panel_w, ed, 1);
                 screen_row++;
+                if (screen_row >= text_rows) break;
+            }
+
+            /*
+             * ---- Inline diff phantom lines (word-wrap) ----
+             * Same logic as the no-wrap path: draw old lines before the
+             * first segment (segment == 0) of the buffer line they reference.
+             */
+            if (ed->show_inline_diff && segment == 0) {
+                while (chunk_idx_wr < ed->inline_diff.count
+                       && ed->inline_diff.chunks[chunk_idx_wr].before_line
+                          == buf_row) {
+                    GitDiffChunk *c = &ed->inline_diff.chunks[chunk_idx_wr];
+                    for (int j = 0; j < c->old_count
+                                    && screen_row < text_rows; j++) {
+                        move(TAB_BAR_HEIGHT + screen_row, panel_w);
+                        draw_phantom_line(c->old_lines[j], text_cols,
+                                          ed->show_whitespace);
+                        screen_row++;
+                    }
+                    chunk_idx_wr++;
+                    if (screen_row >= text_rows) break;
+                }
                 if (screen_row >= text_rows) break;
             }
 
@@ -1181,6 +1252,19 @@ static void draw_editor_area(struct Editor *ed)
          */
         SyntaxToken syn_line_tokens[SYNTAX_MAX_LINE];
 
+        /*
+         * chunk_idx — index into ed->inline_diff.chunks[] for the next
+         * chunk whose phantom lines haven't been rendered yet.  Chunks
+         * are sorted by before_line (ascending, matching diff order).
+         * We skip chunks that are above the viewport.
+         */
+        int chunk_idx = 0;
+        if (ed->show_inline_diff) {
+            while (chunk_idx < ed->inline_diff.count
+                   && ed->inline_diff.chunks[chunk_idx].before_line < ed->view_row)
+                chunk_idx++;
+        }
+
         int buf_row = ed->view_row;
         int screen_row = 0;
         while (screen_row < text_rows) {
@@ -1192,6 +1276,32 @@ static void draw_editor_area(struct Editor *ed)
             if (ed->region_active && buf_row == ed->region_start_row) {
                 draw_region_hborder(screen_row, panel_w, ed, 1);
                 screen_row++;
+                if (screen_row >= text_rows) break;
+            }
+
+            /*
+             * ---- Inline diff phantom lines ----
+             * Before rendering this buffer line, draw any old (deleted)
+             * lines from the diff that belong at this position.
+             *
+             * Phantom lines are "attached" to their before_line: they
+             * appear on screen immediately above the buffer line they
+             * reference.  Multiple chunks can start at the same line
+             * (e.g. if two hunks coincide), so we use a while loop.
+             */
+            if (ed->show_inline_diff) {
+                while (chunk_idx < ed->inline_diff.count
+                       && ed->inline_diff.chunks[chunk_idx].before_line == buf_row) {
+                    GitDiffChunk *c = &ed->inline_diff.chunks[chunk_idx];
+                    for (int j = 0; j < c->old_count && screen_row < text_rows; j++) {
+                        move(TAB_BAR_HEIGHT + screen_row, panel_w);
+                        draw_phantom_line(c->old_lines[j], text_cols,
+                                          ed->show_whitespace);
+                        screen_row++;
+                    }
+                    chunk_idx++;
+                    if (screen_row >= text_rows) break;
+                }
                 if (screen_row >= text_rows) break;
             }
 
@@ -1593,6 +1703,13 @@ void display_render(struct Editor *ed)
                 screen_row++;          /* bottom border pushed us down */
         }
 
+        /* Inline diff phantom lines (same adjustment as normal mode) */
+        if (ed->show_inline_diff) {
+            screen_row += git_phantom_lines_in_range(
+                &ed->inline_diff,
+                ed->view_row, ed->cursor_row + 1);
+        }
+
     } else {
         /*
          * Case B (normal mode): straightforward linear mapping.
@@ -1607,6 +1724,23 @@ void display_render(struct Editor *ed)
                 screen_row++;
             if (ed->cursor_row > ed->region_end_row)
                 screen_row++;
+        }
+
+        /*
+         * Adjust for inline diff phantom lines.
+         *
+         * Phantom lines appear above their associated buffer line, pushing
+         * all subsequent screen rows down.  We count all phantom lines
+         * between view_row and cursor_row (inclusive) to compute the offset.
+         *
+         * We use cursor_row + 1 as the upper bound so that phantom lines
+         * at before_line == cursor_row (which appear above the cursor's
+         * line on screen) are included in the offset.
+         */
+        if (ed->show_inline_diff) {
+            screen_row += git_phantom_lines_in_range(
+                &ed->inline_diff,
+                ed->view_row, ed->cursor_row + 1);
         }
     }
 

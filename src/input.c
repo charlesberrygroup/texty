@@ -721,6 +721,10 @@ void input_process_key(struct Editor *ed)
             editor_toggle_git_panel(ed);
             break;
 
+        case KEY_F(10):        /* F10 — Toggle inline diff view */
+            editor_toggle_inline_diff(ed);
+            break;
+
         case CTRL('b'):        /* Ctrl+B — Toggle file explorer panel */
             /*
              * editor_toggle_filetree() handles all the logic:

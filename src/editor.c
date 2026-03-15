@@ -24,6 +24,10 @@
  * Internal helpers
  * ============================================================================ */
 
+/* Forward declaration — defined further down, but called from editor_save and
+ * buffer-switching functions which are earlier in the file. */
+static void refresh_inline_diff(Editor *ed);
+
 /*
  * clamp — return `value` clamped to the range [lo, hi].
  */
@@ -231,6 +235,9 @@ void editor_cleanup(Editor *ed)
         free(ed->git_status);
         ed->git_status = NULL;
     }
+
+    /* Free inline diff chunks */
+    git_diff_chunks_free(&ed->inline_diff);
 }
 
 /* ============================================================================
@@ -389,6 +396,10 @@ int editor_save(Editor *ed)
     /* Refresh git line markers after saving */
     git_refresh(&buf->git_state, buf->filename, buf->num_lines);
 
+    /* Refresh inline diff chunks if the view is active */
+    if (ed->show_inline_diff)
+        refresh_inline_diff(ed);
+
     return 0;
 }
 
@@ -409,6 +420,10 @@ void editor_next_buffer(Editor *ed)
     ed->current_buffer = (ed->current_buffer + 1) % ed->num_buffers;
 
     restore_cursor_from_buffer(ed);
+
+    /* Refresh inline diff for the new buffer if the view is active */
+    if (ed->show_inline_diff)
+        refresh_inline_diff(ed);
 }
 
 void editor_prev_buffer(Editor *ed)
@@ -423,6 +438,10 @@ void editor_prev_buffer(Editor *ed)
                          % ed->num_buffers;
 
     restore_cursor_from_buffer(ed);
+
+    /* Refresh inline diff for the new buffer if the view is active */
+    if (ed->show_inline_diff)
+        refresh_inline_diff(ed);
 }
 
 void editor_close_buffer(Editor *ed)
@@ -1964,6 +1983,84 @@ void editor_toggle_git_panel(Editor *ed)
 }
 
 /* ============================================================================
+ * Inline diff view
+ * ============================================================================ */
+
+/*
+ * refresh_inline_diff — re-fetch and parse the diff for the current buffer.
+ *
+ * Called internally whenever the inline diff data may be stale (toggle on,
+ * buffer switch, file save).  Clears the old chunks and repopulates them
+ * from `git diff HEAD`.
+ *
+ * Does nothing if show_inline_diff is off.
+ */
+static void refresh_inline_diff(Editor *ed)
+{
+    /* Always clear old data first */
+    git_diff_chunks_free(&ed->inline_diff);
+
+    if (!ed->show_inline_diff) return;
+
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf || !buf->git_state.repo_root || !buf->filename)
+        return;
+
+    /*
+     * Fetch the raw diff output by shelling out to git.
+     * git_get_diff_text() returns a heap-allocated string or NULL.
+     */
+    char *diff = git_get_diff_text(buf->git_state.repo_root, buf->filename);
+    if (diff) {
+        git_extract_chunks(&ed->inline_diff, diff);
+        free(diff);
+    }
+}
+
+void editor_toggle_inline_diff(Editor *ed)
+{
+    if (!ed->show_inline_diff) {
+        /*
+         * Toggle ON — verify we're in a git repo with a tracked file,
+         * then fetch the diff and parse it into chunks.
+         */
+        Buffer *buf = editor_current_buffer(ed);
+        if (!buf || !buf->git_state.repo_root) {
+            editor_set_status(ed, "Not in a git repository.");
+            return;
+        }
+        if (!buf->git_state.is_tracked) {
+            editor_set_status(ed, "File is not tracked by git.");
+            return;
+        }
+        if (!buf->filename) {
+            editor_set_status(ed, "Buffer has no filename.");
+            return;
+        }
+
+        ed->show_inline_diff = 1;
+        refresh_inline_diff(ed);
+
+        if (ed->inline_diff.count == 0)
+            editor_set_status(ed, "Inline diff: no changes from HEAD.");
+        else
+            editor_set_status(ed, "Inline diff ON — %d change(s). F10 to toggle off.",
+                              ed->inline_diff.count);
+
+        /* Scroll may need adjustment since phantom lines take space */
+        editor_scroll(ed);
+
+    } else {
+        /*
+         * Toggle OFF — clear the chunks and turn off phantom rendering.
+         */
+        ed->show_inline_diff = 0;
+        git_diff_chunks_free(&ed->inline_diff);
+        editor_set_status(ed, "Inline diff OFF.");
+    }
+}
+
+/* ============================================================================
  * Misc
  * ============================================================================ */
 
@@ -2054,6 +2151,26 @@ void editor_scroll(Editor *ed)
             ed->view_row = ed->cursor_row;
         if (ed->cursor_row >= ed->view_row + rows)
             ed->view_row = ed->cursor_row - rows + 1;
+
+        /*
+         * Inline diff adjustment: phantom lines consume screen rows, so the
+         * cursor may be pushed off-screen even though it's within
+         * [view_row, view_row + rows).  We scroll down until the cursor's
+         * effective screen position (including phantom lines) fits.
+         *
+         * This loop typically runs 0-2 iterations because phantom lines are
+         * sparse.  The guard (view_row <= cursor_row) prevents infinite loops.
+         */
+        if (ed->show_inline_diff) {
+            while (ed->view_row <= ed->cursor_row) {
+                int phantoms = git_phantom_lines_in_range(
+                    &ed->inline_diff,
+                    ed->view_row, ed->cursor_row + 1);
+                int cursor_screen = (ed->cursor_row - ed->view_row) + phantoms;
+                if (cursor_screen < rows) break;
+                ed->view_row++;
+            }
+        }
 
         /* Horizontal */
         if (ed->cursor_col < ed->view_col)

@@ -128,6 +128,95 @@ int git_refresh(GitState *gs, const char *filepath, int total_lines);
  */
 int git_parse_diff_output(GitState *gs, const char *diff_text, int total_lines);
 
+/* ---- Inline diff structures (for the inline diff view) -------------------- */
+
+/*
+ * GitDiffChunk — a group of deleted/changed lines from HEAD.
+ *
+ * When the user toggles inline diff mode (Ctrl+D), the editor parses the
+ * unified diff output into chunks.  Each chunk represents a contiguous block
+ * of removed lines from a diff hunk.  A single diff hunk can produce multiple
+ * chunks if removals are separated by context lines within the hunk.
+ *
+ * `before_line` is the 0-based buffer line number in the CURRENT (new) file
+ * where the phantom lines should be displayed.  The old lines appear visually
+ * ABOVE this buffer line in the inline diff view.
+ *
+ * For example, if lines were deleted between buffer lines 4 and 5,
+ * before_line would be 5 — the phantom lines appear between lines 4 and 5
+ * on screen.
+ */
+typedef struct {
+    int     before_line;    /* show old lines before this 0-based buffer line */
+    char  **old_lines;      /* heap-allocated array of removed line strings   */
+    int     old_count;      /* number of old lines in this chunk              */
+} GitDiffChunk;
+
+/*
+ * GitDiffChunks — collection of diff chunks for one file.
+ *
+ * Populated by git_extract_chunks().  Freed by git_diff_chunks_free().
+ * Used by the display module to render "phantom" lines (the old content
+ * from HEAD) when inline diff mode is active.
+ *
+ * Chunks are stored in order of increasing before_line, matching the order
+ * they appear in the diff output.
+ */
+typedef struct {
+    GitDiffChunk *chunks;   /* heap-allocated array of chunks */
+    int           count;    /* number of valid entries        */
+    int           capacity; /* allocated slots                */
+} GitDiffChunks;
+
+/* ---- Inline diff functions ------------------------------------------------ */
+
+/**
+ * git_extract_chunks — parse unified diff text into positioned chunks.
+ *
+ * Each chunk contains the removed lines from a contiguous deletion or
+ * modification within a hunk, along with the 0-based buffer line number
+ * they should appear before in the inline diff view.
+ *
+ * `diff_text` is the raw output of `git diff HEAD -- <file>`.
+ *
+ * Returns 0 on success, -1 on error.
+ */
+int git_extract_chunks(GitDiffChunks *dc, const char *diff_text);
+
+/**
+ * git_diff_chunks_free — free all memory in a GitDiffChunks.
+ *
+ * Safe to call on a zeroed or already-freed GitDiffChunks.
+ */
+void git_diff_chunks_free(GitDiffChunks *dc);
+
+/**
+ * git_get_diff_text — run `git diff HEAD -- <file>` and return raw output.
+ *
+ * Shells out to the `git` CLI.  Returns a heap-allocated string that the
+ * caller must free(), or NULL on error.
+ *
+ * `repo_root` is the absolute path to the git repository root.
+ * `filepath`  is the absolute path to the file.
+ */
+char *git_get_diff_text(const char *repo_root, const char *filepath);
+
+/**
+ * git_phantom_lines_in_range — count phantom (old) lines in a line range.
+ *
+ * Returns the total number of old lines from chunks whose before_line is
+ * in [from_line, to_line).  Used by display.c to compute the cursor's
+ * screen offset when inline diff is active.
+ *
+ * For cursor positioning, call with:
+ *   from_line = ed->view_row
+ *   to_line   = ed->cursor_row + 1
+ * so that phantom lines at cursor_row (which appear above the cursor) are
+ * included in the offset.
+ */
+int git_phantom_lines_in_range(const GitDiffChunks *dc,
+                               int from_line, int to_line);
+
 /* ---- Git status list (for the status panel) ------------------------------- */
 
 /** Maximum number of entries in a git status listing. */

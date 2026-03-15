@@ -239,6 +239,30 @@ typedef struct Editor {
 
     /** git_panel_scroll — first visible entry in the git panel. */
     int      git_panel_scroll;
+
+    /* ---- Inline diff view ------------------------------------------------- */
+
+    /*
+     * show_inline_diff — when non-zero, the editor displays "phantom" lines
+     * from the HEAD version of the file interleaved with the buffer content.
+     *
+     * These phantom lines show what was removed or changed, rendered in red.
+     * They are display-only — they do not exist in the buffer and cannot be
+     * edited.  Toggle with F10.
+     */
+    int      show_inline_diff;
+
+    /*
+     * inline_diff — parsed diff chunks for the current buffer.
+     *
+     * Populated by editor_toggle_inline_diff() when the user toggles the
+     * view on, and refreshed on save.  Freed when the view is toggled off
+     * or the editor is cleaned up.
+     *
+     * Each chunk contains the removed lines from one contiguous deletion
+     * in the diff, positioned at the correct buffer line.
+     */
+    GitDiffChunks inline_diff;
 } Editor;
 
 /* ---- Lifecycle ------------------------------------------------------------ */
@@ -573,6 +597,20 @@ void editor_mark_region(Editor *ed);
  * If visible and unfocused: gives the panel focus.
  */
 void editor_toggle_git_panel(Editor *ed);
+
+/* ---- Inline diff view ----------------------------------------------------- */
+
+/**
+ * editor_toggle_inline_diff — toggle the inline diff view (Ctrl+D).
+ *
+ * When toggled on: fetches `git diff HEAD` for the current file, parses
+ * the diff into chunks, and enables phantom-line rendering in display.c.
+ * When toggled off: clears the chunks and disables phantom-line rendering.
+ *
+ * Only works for tracked files in a git repository.
+ * Key binding: F10 (next to F9 for git status panel).
+ */
+void editor_toggle_inline_diff(Editor *ed);
 
 /* ---- Misc ----------------------------------------------------------------- */
 
