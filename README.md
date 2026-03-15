@@ -27,6 +27,12 @@ A terminal-based IDE written in C, built from scratch.
 - Syntax highlighting for C, C++, Python, JavaScript, TypeScript, Rust, Go, JSON, Markdown, Shell, and Makefile
 - Region highlight (Ctrl+U) — mark lines with a visible box border
 - File explorer panel (Ctrl+B) — browse, open, create, rename, and delete files
+- Git gutter — colored markers for added (+), modified (~), and deleted (_) lines
+- Git status panel (F9) — right-side panel listing changed files
+- Git blame (Shift+F9) — per-line author and date annotations
+- Inline diff view (F10) — see deleted/changed lines from HEAD inline
+- Stage hunks (F11) — stage individual diff hunks to the index
+- Commit (F12) — commit staged changes with a message prompt
 
 ## Requirements
 
@@ -136,6 +142,29 @@ Produces the `./texty` binary.
 > focused → editor focused (panel visible). Opening a file that is already in
 > an open buffer switches to that buffer instead of creating a duplicate.
 
+### Git
+
+| Key              | Action                                          |
+|------------------|-------------------------------------------------|
+| F9               | Toggle git status panel                         |
+| Shift+F9         | Toggle git blame (author + date per line)       |
+| F10              | Toggle inline diff view (old lines from HEAD)   |
+| F11              | Stage the hunk at the cursor                    |
+| F12              | Commit staged changes (prompts for message)     |
+
+> **Note:** The git gutter (colored +/~/_  markers) is always visible for
+> tracked files. F11 requires the file to be saved first. Blame auto-clears
+> when you edit (line numbers shift); save and re-toggle to refresh.
+
+#### Git status panel (F9)
+
+| Key              | Action                                          |
+|------------------|-------------------------------------------------|
+| Up / Down        | Navigate entries                                |
+| Enter            | Open the highlighted file                       |
+| Escape           | Return focus to editor (panel stays open)       |
+| Ctrl+W           | Close the panel                                 |
+
 ### File
 
 | Key              | Action                               |
@@ -158,6 +187,7 @@ src/
   undo.h/c      — Undo / redo stack
   syntax.h/c    — Syntax highlighting (C, Python, JS, Rust, Go, and more)
   filetree.h/c  — File explorer tree logic
+  git.h/c       — Git integration (gutter, blame, diff, staging, commit)
 Makefile
 TODO.md         — Phased development roadmap
 ```

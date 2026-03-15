@@ -98,11 +98,13 @@ that all future phases will build on.
 - [x] Red box border with horizontal lines at top/bottom and vertical bars on sides
 - [x] Second Ctrl+U clears the region
 
-### Split Panes
-- [ ] Split editor horizontally (Ctrl+Shift+-)
-- [ ] Split editor vertically (Ctrl+Shift+\)
-- [ ] Move focus between panes (Ctrl+Shift+Arrow)
-- [ ] Close pane
+### Git Integration ✅
+- [x] Show modified/added/deleted lines in gutter
+- [x] Git status panel (F9)
+- [x] Git blame (Shift+F9)
+- [x] Inline diff view (F10)
+- [x] Stage hunks (F11)
+- [x] Commit from editor (F12)
 
 ### Build System Integration
 - [ ] Run build command (F5 / Ctrl+Shift+B)
@@ -112,10 +114,19 @@ that all future phases will build on.
 - [ ] Highlight error lines in editor
 - [ ] Configurable build command per project (texty.json)
 
-### Embedded Terminal
-- [ ] Open terminal panel (Ctrl+`)
-- [ ] Run shell commands without leaving the editor
-- [ ] Toggle terminal panel height
+### Navigation & Search
+- [ ] Fuzzy file finder (Ctrl+P)
+- [ ] Go-to-symbol in file (Ctrl+Shift+O)
+- [ ] Go-to-symbol in workspace (Ctrl+T)
+- [ ] Command palette (Ctrl+Shift+P)
+- [ ] Recent files list
+
+### Configuration & Extensibility
+- [ ] Config file (~/.config/texty/config.toml)
+- [ ] Custom key bindings
+- [ ] Theme support (color schemes)
+- [ ] Plugin system (dynamic shared libraries)
+- [ ] Per-project settings (texty.json in project root)
 
 ---
 
@@ -133,26 +144,16 @@ that all future phases will build on.
 - [ ] Rename symbol (F2)
 - [ ] Signature help for function calls
 
-### Git Integration
-- [x] Show modified/added/deleted lines in gutter
-- [x] Git status panel
-- [x] Inline diff view
-- [x] Stage hunks
-- [x] Commit from editor
+### Embedded Terminal
+- [ ] Open terminal panel (Ctrl+`)
+- [ ] Run shell commands without leaving the editor
+- [ ] Toggle terminal panel height
 
-### Navigation & Search
-- [ ] Fuzzy file finder (Ctrl+P)
-- [ ] Go-to-symbol in file (Ctrl+Shift+O)
-- [ ] Go-to-symbol in workspace (Ctrl+T)
-- [ ] Command palette (Ctrl+Shift+P)
-- [ ] Recent files list
-
-### Configuration & Extensibility
-- [ ] Config file (~/.config/texty/config.toml)
-- [ ] Custom key bindings
-- [ ] Theme support (color schemes)
-- [ ] Plugin system (dynamic shared libraries)
-- [ ] Per-project settings (texty.json in project root)
+### Split Panes
+- [ ] Split editor horizontally (Ctrl+Shift+-)
+- [ ] Split editor vertically (Ctrl+Shift+\)
+- [ ] Move focus between panes (Ctrl+Shift+Arrow)
+- [ ] Close pane
 
 ---
 
