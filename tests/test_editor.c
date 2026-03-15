@@ -665,6 +665,252 @@ TEST(test_autoclose_cursor_mid_line)
 }
 
 /* ============================================================================
+ * Region highlight tests
+ * ============================================================================ */
+
+TEST(test_mark_region_from_selection)
+{
+    /*
+     * Select rows 0-1 (anchor on row 0, cursor on row 1), then mark region.
+     * After marking: region_active=1, start=0, end=1.
+     */
+    Editor ed; make_editor(&ed);
+    editor_insert_newline(&ed);   /* now 2 lines */
+    ed.cursor_row      = 1;
+    ed.sel_active      = 1;
+    ed.sel_anchor_row  = 0;
+    ed.sel_anchor_col  = 0;
+    editor_mark_region(&ed);
+    ASSERT(ed.region_active    == 1, "region_active set after marking");
+    ASSERT(ed.region_start_row == 0, "region_start_row = 0");
+    ASSERT(ed.region_end_row   == 1, "region_end_row = 1");
+    editor_cleanup(&ed);
+}
+
+TEST(test_mark_region_clears_selection)
+{
+    /* Selection should be cleared after Ctrl+U marks the region. */
+    Editor ed; make_editor(&ed);
+    editor_insert_newline(&ed);
+    ed.cursor_row      = 1;
+    ed.sel_active      = 1;
+    ed.sel_anchor_row  = 0;
+    ed.sel_anchor_col  = 0;
+    editor_mark_region(&ed);
+    ASSERT(ed.sel_active == 0, "selection cleared after marking region");
+    editor_cleanup(&ed);
+}
+
+TEST(test_mark_region_reversed_anchor)
+{
+    /*
+     * Anchor is BELOW the cursor (user selected upward with Shift+Up).
+     * Region should still be normalised: start < end.
+     */
+    Editor ed; make_editor(&ed);
+    editor_insert_newline(&ed);
+    editor_insert_newline(&ed);   /* 3 lines: 0, 1, 2 */
+    ed.cursor_row      = 0;       /* cursor is on row 0 */
+    ed.sel_active      = 1;
+    ed.sel_anchor_row  = 2;       /* anchor is on row 2 — below the cursor */
+    ed.sel_anchor_col  = 0;
+    editor_mark_region(&ed);
+    ASSERT(ed.region_start_row == 0, "normalised: start is the smaller row");
+    ASSERT(ed.region_end_row   == 2, "normalised: end is the larger row");
+    editor_cleanup(&ed);
+}
+
+TEST(test_mark_region_clear_on_second_call)
+{
+    /*
+     * After a region is marked, a second Ctrl+U with no selection clears it.
+     */
+    Editor ed; make_editor(&ed);
+    editor_insert_newline(&ed);
+    ed.cursor_row      = 1;
+    ed.sel_active      = 1;
+    ed.sel_anchor_row  = 0;
+    ed.sel_anchor_col  = 0;
+    editor_mark_region(&ed);       /* mark */
+    ASSERT(ed.region_active == 1,  "region set after first Ctrl+U");
+    editor_mark_region(&ed);       /* clear (no selection this time) */
+    ASSERT(ed.region_active == 0,  "region cleared after second Ctrl+U");
+    editor_cleanup(&ed);
+}
+
+TEST(test_mark_region_no_selection_no_region)
+{
+    /*
+     * Ctrl+U with no selection and no existing region: region stays inactive.
+     */
+    Editor ed; make_editor(&ed);
+    editor_mark_region(&ed);
+    ASSERT(ed.region_active == 0, "region stays inactive with no selection");
+    editor_cleanup(&ed);
+}
+
+/* ============================================================================
+ * Shift+Up / Shift+Down selection
+ * ============================================================================ */
+
+TEST(test_select_down_from_middle_of_line)
+{
+    /*
+     * Two lines: "abcdefghijk" and "lmnopqrstuv".
+     * Cursor starts at col 2 ('c').  Shift+Down should anchor at (0,2) and
+     * move cursor to (1,2).  The selected text spans c..n.
+     */
+    Editor ed; make_editor(&ed);
+    const char *text1 = "abcdefghijk";
+    for (int i = 0; text1[i]; i++)
+        editor_insert_char(&ed, text1[i]);
+    editor_insert_newline(&ed);
+    const char *text2 = "lmnopqrstuv";
+    for (int i = 0; text2[i]; i++)
+        editor_insert_char(&ed, text2[i]);
+
+    /* Place cursor on 'c' (row 0, col 2) */
+    ed.cursor_row  = 0;
+    ed.cursor_col  = 2;
+    ed.desired_col = 2;
+
+    editor_select_down(&ed);
+
+    ASSERT(ed.sel_active,              "selection is active");
+    ASSERT(ed.sel_anchor_row == 0,     "anchor row is 0");
+    ASSERT(ed.sel_anchor_col == 2,     "anchor col is 2 (on 'c')");
+    ASSERT(ed.cursor_row == 1,         "cursor moved to row 1");
+    ASSERT(ed.cursor_col == 2,         "cursor at col 2 (on 'n')");
+    editor_cleanup(&ed);
+}
+
+TEST(test_select_down_from_start_of_line)
+{
+    /*
+     * Cursor at col 0 ('a').  Shift+Down anchors at (0,0) and moves to (1,0).
+     * The selection covers the entire first line: "a" through "k" (plus newline).
+     */
+    Editor ed; make_editor(&ed);
+    const char *text1 = "abcdefghijk";
+    for (int i = 0; text1[i]; i++)
+        editor_insert_char(&ed, text1[i]);
+    editor_insert_newline(&ed);
+    const char *text2 = "lmnopqrstuv";
+    for (int i = 0; text2[i]; i++)
+        editor_insert_char(&ed, text2[i]);
+
+    /* Place cursor at start of line 0 */
+    ed.cursor_row  = 0;
+    ed.cursor_col  = 0;
+    ed.desired_col = 0;
+
+    editor_select_down(&ed);
+
+    ASSERT(ed.sel_active,              "selection is active");
+    ASSERT(ed.sel_anchor_row == 0,     "anchor row is 0");
+    ASSERT(ed.sel_anchor_col == 0,     "anchor col is 0 (on 'a')");
+    ASSERT(ed.cursor_row == 1,         "cursor moved to row 1");
+    ASSERT(ed.cursor_col == 0,         "cursor at col 0 (start of next line)");
+    editor_cleanup(&ed);
+}
+
+TEST(test_select_up_from_second_line)
+{
+    /*
+     * Cursor on row 1, col 2.  Shift+Up should anchor at (1,2) and move to (0,2).
+     */
+    Editor ed; make_editor(&ed);
+    const char *text1 = "abcdefghijk";
+    for (int i = 0; text1[i]; i++)
+        editor_insert_char(&ed, text1[i]);
+    editor_insert_newline(&ed);
+    const char *text2 = "lmnopqrstuv";
+    for (int i = 0; text2[i]; i++)
+        editor_insert_char(&ed, text2[i]);
+
+    /* Place cursor on row 1, col 2 */
+    ed.cursor_row  = 1;
+    ed.cursor_col  = 2;
+    ed.desired_col = 2;
+
+    editor_select_up(&ed);
+
+    ASSERT(ed.sel_active,              "selection is active");
+    ASSERT(ed.sel_anchor_row == 1,     "anchor row is 1");
+    ASSERT(ed.sel_anchor_col == 2,     "anchor col is 2");
+    ASSERT(ed.cursor_row == 0,         "cursor moved to row 0");
+    ASSERT(ed.cursor_col == 2,         "cursor at col 2");
+    editor_cleanup(&ed);
+}
+
+TEST(test_select_down_extends_existing_selection)
+{
+    /*
+     * Start with cursor at (0,0), do two Shift+Downs.
+     * Anchor should stay at (0,0), cursor should be on row 2.
+     */
+    Editor ed; make_editor(&ed);
+    editor_insert_char(&ed, 'a');
+    editor_insert_newline(&ed);
+    editor_insert_char(&ed, 'b');
+    editor_insert_newline(&ed);
+    editor_insert_char(&ed, 'c');
+
+    ed.cursor_row  = 0;
+    ed.cursor_col  = 0;
+    ed.desired_col = 0;
+
+    editor_select_down(&ed);   /* anchor (0,0) → cursor (1,0) */
+    editor_select_down(&ed);   /* anchor stays, cursor (2,0) */
+
+    ASSERT(ed.sel_active,              "selection still active");
+    ASSERT(ed.sel_anchor_row == 0,     "anchor stays at row 0");
+    ASSERT(ed.sel_anchor_col == 0,     "anchor stays at col 0");
+    ASSERT(ed.cursor_row == 2,         "cursor on row 2 after two Shift+Downs");
+    editor_cleanup(&ed);
+}
+
+TEST(test_select_up_at_top_does_nothing)
+{
+    /*
+     * Cursor already at row 0.  Shift+Up should activate selection but
+     * not move the cursor (it's already at the top).
+     */
+    Editor ed; make_editor(&ed);
+    editor_insert_char(&ed, 'x');
+    ed.cursor_row  = 0;
+    ed.cursor_col  = 0;
+    ed.desired_col = 0;
+
+    editor_select_up(&ed);
+
+    ASSERT(ed.sel_active,              "selection is activated");
+    ASSERT(ed.sel_anchor_row == 0,     "anchor at row 0");
+    ASSERT(ed.cursor_row == 0,         "cursor stays at row 0");
+    editor_cleanup(&ed);
+}
+
+TEST(test_select_down_at_bottom_does_nothing)
+{
+    /*
+     * Single line buffer.  Shift+Down should activate selection but
+     * not move the cursor (there is no line below).
+     */
+    Editor ed; make_editor(&ed);
+    editor_insert_char(&ed, 'x');
+    ed.cursor_row  = 0;
+    ed.cursor_col  = 0;
+    ed.desired_col = 0;
+
+    editor_select_down(&ed);
+
+    ASSERT(ed.sel_active,              "selection is activated");
+    ASSERT(ed.sel_anchor_row == 0,     "anchor at row 0");
+    ASSERT(ed.cursor_row == 0,         "cursor stays at row 0 (no line below)");
+    editor_cleanup(&ed);
+}
+
+/* ============================================================================
  * main
  * ============================================================================ */
 
@@ -721,6 +967,19 @@ int main(void)
     RUN(test_autoclose_single_quote);
     RUN(test_autoclose_undo_removes_both);
     RUN(test_autoclose_cursor_mid_line);
+
+    RUN(test_mark_region_from_selection);
+    RUN(test_mark_region_clears_selection);
+    RUN(test_mark_region_reversed_anchor);
+    RUN(test_mark_region_clear_on_second_call);
+    RUN(test_mark_region_no_selection_no_region);
+
+    RUN(test_select_down_from_middle_of_line);
+    RUN(test_select_down_from_start_of_line);
+    RUN(test_select_up_from_second_line);
+    RUN(test_select_down_extends_existing_selection);
+    RUN(test_select_up_at_top_does_nothing);
+    RUN(test_select_down_at_bottom_does_nothing);
 
     TEST_SUMMARY();
 }

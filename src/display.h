@@ -99,6 +99,9 @@ struct Editor;
 /** CPAIR_FILETREE_CURSOR — the currently highlighted entry (black on white). */
 #define CPAIR_FILETREE_CURSOR 20
 
+/** CPAIR_REGION — red foreground used for the region box border (Ctrl+U). */
+#define CPAIR_REGION          21
+
 /* ---- Functions ------------------------------------------------------------ */
 
 /**

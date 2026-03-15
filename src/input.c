@@ -649,6 +649,10 @@ void input_process_key(struct Editor *ed)
             try_quit(ed);
             break;
 
+        case CTRL('u'):        /* Ctrl+U — Mark/clear region highlight */
+            editor_mark_region(ed);
+            break;
+
         case CTRL('b'):        /* Ctrl+B — Toggle file explorer panel */
             /*
              * editor_toggle_filetree() handles all the logic:

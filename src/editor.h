@@ -197,6 +197,28 @@ typedef struct Editor {
      * by draw_filetree_panel() so the cursor stays in view.
      */
     int      filetree_scroll;
+
+    /* ---- Region highlight ------------------------------------------------- */
+
+    /*
+     * region_active — non-zero when a region box is being displayed.
+     *
+     * Set by Ctrl+U when text is selected (captures the selected row range).
+     * Pressing Ctrl+U again with no active selection clears it.
+     *
+     * The region is a pure display feature: text is not changed, and the
+     * region is drawn on top of whatever is in the buffer.
+     */
+    int      region_active;
+
+    /*
+     * region_start_row / region_end_row — first and last buffer rows of
+     * the highlighted region, inclusive, in 0-based buffer coordinates.
+     *
+     * Only meaningful when region_active is non-zero.
+     */
+    int      region_start_row;
+    int      region_end_row;
 } Editor;
 
 /* ---- Lifecycle ------------------------------------------------------------ */
@@ -506,6 +528,20 @@ void editor_redo(Editor *ed);
  * If the panel is currently visible: hides it and returns focus to the editor.
  */
 void editor_toggle_filetree(Editor *ed);
+
+/* ---- Region highlight ----------------------------------------------------- */
+
+/**
+ * editor_mark_region — mark the selected rows as a persistent region (Ctrl+U).
+ *
+ * Behaviour:
+ *   - If a selection is active: captures the selection's row span as the
+ *     region, then clears the selection.  The red box border appears around
+ *     those rows immediately.
+ *   - If no selection but a region is active: clears the region.
+ *   - If neither: shows a help message in the status bar.
+ */
+void editor_mark_region(Editor *ed);
 
 /* ---- Misc ----------------------------------------------------------------- */
 

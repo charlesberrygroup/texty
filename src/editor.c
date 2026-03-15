@@ -1834,6 +1834,53 @@ void editor_redo(Editor *ed)
 }
 
 /* ============================================================================
+ * Region highlight
+ * ============================================================================ */
+
+void editor_mark_region(Editor *ed)
+{
+    if (ed->sel_active) {
+        /*
+         * Capture the selection's row range as the region.
+         *
+         * The anchor (sel_anchor_row) may be above OR below the cursor,
+         * depending on which direction the user extended the selection.
+         * We normalise so that region_start_row is always the earlier row.
+         */
+        int sr, er;
+        if (ed->sel_anchor_row <= ed->cursor_row) {
+            sr = ed->sel_anchor_row;
+            er = ed->cursor_row;
+        } else {
+            sr = ed->cursor_row;
+            er = ed->sel_anchor_row;
+        }
+
+        ed->region_active    = 1;
+        ed->region_start_row = sr;
+        ed->region_end_row   = er;
+
+        /*
+         * Clear the selection so it does not compete visually with the
+         * region border.  The region itself is the persistent indicator.
+         */
+        editor_selection_clear(ed);
+
+        editor_set_status(ed, "Region marked: lines %d-%d  (Ctrl+U to clear)",
+                          sr + 1, er + 1);
+
+    } else if (ed->region_active) {
+        /* Second Ctrl+U with no selection: clear the region. */
+        ed->region_active = 0;
+        editor_set_status(ed, "Region cleared.");
+
+    } else {
+        editor_set_status(ed,
+            "Select rows with Shift+Arrow, then Ctrl+U to mark a region.");
+    }
+}
+
+/* ============================================================================
  * Misc
  * ============================================================================ */
 

@@ -148,6 +148,14 @@ void display_init(void)
         init_pair(CPAIR_FILETREE_DIR,    COLOR_BLUE,  -1);
         init_pair(CPAIR_FILETREE_FILE,   -1,          -1);
         init_pair(CPAIR_FILETREE_CURSOR, COLOR_BLACK, COLOR_WHITE);
+
+        /*
+         * CPAIR_REGION — used for the region box border drawn by Ctrl+U.
+         * Red foreground on the terminal's default background, so the border
+         * is visible on both dark and light terminals without changing the
+         * background color of any text.
+         */
+        init_pair(CPAIR_REGION, COLOR_RED, -1);
     }
 }
 
@@ -634,6 +642,32 @@ static void draw_filetree_panel(struct Editor *ed)
     }
 }
 
+/*
+ * draw_region_hborder — draw a horizontal border line for the region box.
+ *
+ * Draws ┌──────┐ (top=1) or └──────┘ (top=0) across the full editor width
+ * using ACS box-drawing characters in the CPAIR_REGION color (red).
+ *
+ * screen_row:  0-based row within the text area (not absolute terminal row)
+ * panel_w:     column offset for the file-tree panel (0 if hidden)
+ * ed:          editor state, used for term_cols
+ * top:         1 = top border (┌─┐), 0 = bottom border (└─┘)
+ */
+static void draw_region_hborder(int screen_row, int panel_w,
+                                struct Editor *ed, int top)
+{
+    int row = TAB_BAR_HEIGHT + screen_row;
+    chtype left_ch  = top ? ACS_ULCORNER : ACS_LLCORNER;
+    chtype right_ch = top ? ACS_URCORNER : ACS_LRCORNER;
+    int width = ed->term_cols - panel_w;  /* total columns in editor area */
+
+    attron(COLOR_PAIR(CPAIR_REGION));
+    mvaddch(row, panel_w, left_ch);
+    mvhline(row, panel_w + 1, ACS_HLINE, width - 2);
+    mvaddch(row, ed->term_cols - 1, right_ch);
+    attroff(COLOR_PAIR(CPAIR_REGION));
+}
+
 static void draw_editor_area(struct Editor *ed)
 {
     Buffer *buf = editor_current_buffer(ed);
@@ -755,7 +789,20 @@ static void draw_editor_area(struct Editor *ed)
         SyntaxToken syn_line_tokens[SYNTAX_MAX_LINE];
         const SyntaxToken *syn_tokens = NULL;
 
-        for (int screen_row = 0; screen_row < text_rows; screen_row++) {
+        int screen_row = 0;
+        while (screen_row < text_rows) {
+            /*
+             * ---- Region top border ----
+             * Before the first segment of the region start row, draw a
+             * horizontal line ┌──────────┐ across the full editor width.
+             */
+            if (ed->region_active && segment == 0
+                    && buf_row == ed->region_start_row) {
+                draw_region_hborder(screen_row, panel_w, ed, 1);
+                screen_row++;
+                if (screen_row >= text_rows) break;
+            }
+
             /*
              * Move to the start of this screen row, offset right by panel_w
              * so we start drawing after the file-tree panel (if visible).
@@ -769,6 +816,7 @@ static void draw_editor_area(struct Editor *ed)
                 printw("  ~  ");
                 attroff(COLOR_PAIR(CPAIR_GUTTER));
                 clrtoeol();
+                screen_row++;
                 continue;
             }
 
@@ -791,24 +839,53 @@ static void draw_editor_area(struct Editor *ed)
             int is_cursor_row = (buf_row == ed->cursor_row);
             int row_attr      = A_NORMAL;  /* no full-line highlight */
 
+            /*
+             * in_region — true if this buffer row falls within the region
+             * marked by the user with Ctrl+U.  Used to draw a red box border
+             * in the gutter and at the right edge of each region row.
+             */
+            int in_region = ed->region_active
+                            && buf_row >= ed->region_start_row
+                            && buf_row <= ed->region_end_row;
+
             /* ---- Gutter ---- */
-            attron(COLOR_PAIR(CPAIR_GUTTER));
-            if (segment == 0) {
+            if (in_region) {
                 /*
-                 * First segment of this line: show the line number.
-                 * Bold on the cursor row for emphasis.
+                 * Region gutter: draw a red vertical bar (│) followed by
+                 * a 3-digit line number and a space (5 chars total = GUTTER_WIDTH).
+                 *
+                 * The corner characters (┌ └ ┐ ┘) are now on dedicated
+                 * horizontal border rows drawn above/below the region, so
+                 * all content rows use ACS_VLINE for the left border.
                  */
+                attron(COLOR_PAIR(CPAIR_REGION));
                 if (is_cursor_row) attron(A_BOLD);
-                printw("%4d ", buf_row + 1);
+                addch(ACS_VLINE);              /* │ — left border */
+                if (segment == 0)
+                    printw("%3d ", buf_row + 1);  /* line number (3 digits) */
+                else
+                    printw("    ");               /* blank continuation */
                 if (is_cursor_row) attroff(A_BOLD);
+                attroff(COLOR_PAIR(CPAIR_REGION));
             } else {
-                /*
-                 * Continuation segment: leave gutter blank (no line number)
-                 * so the wrapped text looks like a continuation of the line.
-                 */
-                printw("     ");
+                attron(COLOR_PAIR(CPAIR_GUTTER));
+                if (segment == 0) {
+                    /*
+                     * First segment of this line: show the line number.
+                     * Bold on the cursor row for emphasis.
+                     */
+                    if (is_cursor_row) attron(A_BOLD);
+                    printw("%4d ", buf_row + 1);
+                    if (is_cursor_row) attroff(A_BOLD);
+                } else {
+                    /*
+                     * Continuation segment: leave gutter blank (no line number)
+                     * so the wrapped text looks like a continuation of the line.
+                     */
+                    printw("     ");
+                }
+                attroff(COLOR_PAIR(CPAIR_GUTTER));
             }
-            attroff(COLOR_PAIR(CPAIR_GUTTER));
 
             /* ---- Compute the visible slice of this segment ---- */
             const char *line_text = buffer_get_line(buf, buf_row);
@@ -900,12 +977,40 @@ static void draw_editor_area(struct Editor *ed)
                 }
             }
 
+            /* ---- Region right border ---- */
+            if (in_region) {
+                /*
+                 * Draw a red vertical bar (│) at the rightmost terminal column
+                 * for every screen row that belongs to a region line.
+                 *
+                 * Corners are on the dedicated horizontal border rows, so
+                 * all content rows use ACS_VLINE for the right border.
+                 */
+                attron(COLOR_PAIR(CPAIR_REGION));
+                mvaddch(TAB_BAR_HEIGHT + screen_row, ed->term_cols - 1, ACS_VLINE);
+                attroff(COLOR_PAIR(CPAIR_REGION));
+            }
+
             /* ---- Advance (buf_row, segment) ---- */
+            int was_region_end = (ed->region_active
+                                  && buf_row == ed->region_end_row);
             segment++;
-            if (start_col + text_cols >= line_len) {
+            int finished_line = (start_col + text_cols >= line_len);
+            if (finished_line) {
                 /* We have rendered the last (or only) segment of this line */
                 buf_row++;
                 segment = 0;
+            }
+            screen_row++;
+
+            /*
+             * ---- Region bottom border ----
+             * After the last segment of the region end row, draw a
+             * horizontal line └──────────┘ across the full editor width.
+             */
+            if (was_region_end && finished_line && screen_row < text_rows) {
+                draw_region_hborder(screen_row, panel_w, ed, 0);
+                screen_row++;
             }
         }
 
@@ -924,8 +1029,19 @@ static void draw_editor_area(struct Editor *ed)
          */
         SyntaxToken syn_line_tokens[SYNTAX_MAX_LINE];
 
-        for (int screen_row = 0; screen_row < text_rows; screen_row++) {
-            int buf_row = ed->view_row + screen_row;
+        int buf_row = ed->view_row;
+        int screen_row = 0;
+        while (screen_row < text_rows) {
+            /*
+             * ---- Region top border ----
+             * Before the region start row, draw a horizontal line
+             * ┌──────────┐ across the full editor width.
+             */
+            if (ed->region_active && buf_row == ed->region_start_row) {
+                draw_region_hborder(screen_row, panel_w, ed, 1);
+                screen_row++;
+                if (screen_row >= text_rows) break;
+            }
 
             /*
              * Position at the start of this screen row, offset right by panel_w
@@ -942,6 +1058,8 @@ static void draw_editor_area(struct Editor *ed)
                 printw("  ~  ");
                 attroff(COLOR_PAIR(CPAIR_GUTTER));
                 clrtoeol();
+                screen_row++;
+                buf_row++;
                 continue;
             }
 
@@ -961,14 +1079,37 @@ static void draw_editor_area(struct Editor *ed)
                 syn_tokens = syn_line_tokens;
             }
 
-            /* ---- Gutter: line number ---------------------------------------- */
+            /* ---- Gutter: line number (or region border) --------------------- */
             int is_cursor_row = (buf_row == ed->cursor_row);
 
-            attron(COLOR_PAIR(CPAIR_GUTTER));
-            if (is_cursor_row) attron(A_BOLD);
-            printw("%4d ", buf_row + 1);
-            if (is_cursor_row) attroff(A_BOLD);
-            attroff(COLOR_PAIR(CPAIR_GUTTER));
+            /*
+             * in_region — true if this row falls inside the user's marked region.
+             */
+            int in_region = ed->region_active
+                            && buf_row >= ed->region_start_row
+                            && buf_row <= ed->region_end_row;
+
+            if (in_region) {
+                /*
+                 * Region gutter: draw a red vertical bar (│) followed by
+                 * a 3-digit line number and a space (5 chars total = GUTTER_WIDTH).
+                 *
+                 * Corners are on the dedicated horizontal border rows, so
+                 * all content rows use ACS_VLINE for the left border.
+                 */
+                attron(COLOR_PAIR(CPAIR_REGION));
+                if (is_cursor_row) attron(A_BOLD);
+                addch(ACS_VLINE);              /* │ — left border */
+                printw("%3d ", buf_row + 1);
+                if (is_cursor_row) attroff(A_BOLD);
+                attroff(COLOR_PAIR(CPAIR_REGION));
+            } else {
+                attron(COLOR_PAIR(CPAIR_GUTTER));
+                if (is_cursor_row) attron(A_BOLD);
+                printw("%4d ", buf_row + 1);
+                if (is_cursor_row) attroff(A_BOLD);
+                attroff(COLOR_PAIR(CPAIR_GUTTER));
+            }
 
             /* ---- Compute what portion of this row (if any) is selected ------- */
 
@@ -1107,6 +1248,35 @@ static void draw_editor_area(struct Editor *ed)
                 attrset(row_attr);
                 clrtoeol();
                 attrset(A_NORMAL);
+            }
+
+            /* ---- Region right border ---- */
+            if (in_region) {
+                /*
+                 * Draw a red vertical bar (│) at the rightmost terminal column.
+                 *
+                 * Corners are on the dedicated horizontal border rows, so
+                 * all content rows use ACS_VLINE for the right border.
+                 */
+                attron(COLOR_PAIR(CPAIR_REGION));
+                mvaddch(TAB_BAR_HEIGHT + screen_row, ed->term_cols - 1, ACS_VLINE);
+                attroff(COLOR_PAIR(CPAIR_REGION));
+            }
+
+            /* ---- Advance ---- */
+            int was_region_end = (ed->region_active
+                                  && buf_row == ed->region_end_row);
+            buf_row++;
+            screen_row++;
+
+            /*
+             * ---- Region bottom border ----
+             * After the region end row, draw a horizontal line
+             * └──────────┘ across the full editor width.
+             */
+            if (was_region_end && screen_row < text_rows) {
+                draw_region_hborder(screen_row, panel_w, ed, 0);
+                screen_row++;
             }
         }
     }
