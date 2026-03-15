@@ -18,6 +18,7 @@
 #define EDITOR_H
 
 #include "buffer.h"
+#include "build.h"
 #include <stdarg.h>
 
 /*
@@ -278,6 +279,33 @@ typedef struct Editor {
      * Populated when blame is toggled on, cleared when toggled off.
      */
     GitBlameData git_blame;
+
+    /* ---- Build system ----------------------------------------------------- */
+
+    /*
+     * build_result — output and parsed errors from the last build.
+     * NULL until the first build is run.  Freed in editor_cleanup().
+     */
+    BuildResult *build_result;
+
+    /** show_build_panel — non-zero when the build output panel is visible. */
+    int      show_build_panel;
+
+    /** build_panel_focus — non-zero when keyboard input goes to the build panel. */
+    int      build_panel_focus;
+
+    /** build_panel_cursor — index into build_result->errors[] of highlighted row. */
+    int      build_panel_cursor;
+
+    /** build_panel_scroll — first visible error in the build panel. */
+    int      build_panel_scroll;
+
+    /*
+     * build_command — the command to run when F5 is pressed.
+     * Loaded from texty.json if present, otherwise defaults to "make".
+     * Empty string means "not yet loaded".
+     */
+    char     build_command[BUILD_CMD_MAX];
 } Editor;
 
 /* ---- Lifecycle ------------------------------------------------------------ */
@@ -628,6 +656,17 @@ void editor_stage_file(Editor *ed);
  * Stages the highlighted entry and refreshes the panel.
  */
 void editor_stage_panel_file(Editor *ed);
+
+/* ---- Build system --------------------------------------------------------- */
+
+/**
+ * editor_build — run the build command and show the build panel (F5).
+ *
+ * Loads texty.json on first invocation.  Runs the build command (blocking),
+ * parses compiler errors, and shows the build output panel.  Pressing F5
+ * again re-runs the build.
+ */
+void editor_build(Editor *ed);
 
 /* ---- Git blame view ------------------------------------------------------- */
 

@@ -25,3 +25,22 @@ char *display_prompt(struct Editor *ed, const char *prompt)
     (void)prompt;
     return NULL;
 }
+
+/*
+ * display_render — no-op in tests (no terminal to draw to).
+ *
+ * editor_build() calls display_render() to flush "Building..." to screen
+ * before the blocking popen call.  In tests, we just do nothing.
+ */
+void display_render(struct Editor *ed)
+{
+    (void)ed;
+}
+
+/*
+ * display_update_size — no-op in tests (no terminal dimensions).
+ */
+void display_update_size(struct Editor *ed)
+{
+    (void)ed;
+}

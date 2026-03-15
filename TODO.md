@@ -106,13 +106,12 @@ that all future phases will build on.
 - [x] Stage hunks (F11)
 - [x] Commit from editor (F12)
 
-### Build System Integration
-- [ ] Run build command (F5 / Ctrl+Shift+B)
-- [ ] Parse compiler errors and warnings from build output
-- [ ] Error panel showing build output
-- [ ] Jump to error location from error panel (Enter on error)
-- [ ] Highlight error lines in editor
-- [ ] Configurable build command per project (texty.json)
+### Build System Integration ✅
+- [x] Run build command (F5)
+- [x] Parse compiler errors and warnings from build output
+- [x] Error panel showing build output
+- [x] Jump to error location from error panel (Enter on error)
+- [x] Configurable build command per project (texty.json)
 
 ### Navigation & Search
 - [ ] Fuzzy file finder (Ctrl+P)

@@ -22,6 +22,7 @@
 #include "display.h"
 #include "filetree.h"  /* for FileTree, FlatEntry, filetree_toggle, etc. */
 #include "git.h"       /* for git_blame_free — used by auto-clear blame */
+#include "build.h"     /* for BuildResult, BuildError — used by build panel */
 
 #include <stdlib.h>    /* for free() */
 #include <stdio.h>     /* for fopen(), fclose() */
@@ -429,6 +430,92 @@ static void input_process_git_panel_key(struct Editor *ed, int key)
 }
 
 /* ============================================================================
+ * Build panel key handler
+ * ============================================================================ */
+
+/*
+ * input_process_build_panel_key — handle one keypress while the build panel
+ * has focus.
+ *
+ * Up/Down navigate error entries, Enter jumps to the error's file and line,
+ * Escape returns focus to the editor, Ctrl+W closes the panel.
+ */
+static void input_process_build_panel_key(struct Editor *ed, int key)
+{
+    BuildResult *br = ed->build_result;
+    if (!br) return;
+
+    switch (key) {
+    case KEY_UP:
+        if (ed->build_panel_cursor > 0)
+            ed->build_panel_cursor--;
+        break;
+
+    case KEY_DOWN:
+        if (ed->build_panel_cursor < br->error_count - 1)
+            ed->build_panel_cursor++;
+        break;
+
+    case '\n':   /* Enter — jump to the error's file and line */
+    case KEY_ENTER:
+        if (ed->build_panel_cursor >= 0
+                && ed->build_panel_cursor < br->error_count) {
+            BuildError *e = &br->errors[ed->build_panel_cursor];
+
+            /*
+             * Resolve the error's filepath.
+             * If it's a relative path, try to find it relative to the
+             * current buffer's directory or the build working directory.
+             */
+            char fullpath[2048];
+            if (e->filepath[0] == '/') {
+                /* Absolute path — use as-is */
+                strncpy(fullpath, e->filepath, sizeof(fullpath) - 1);
+                fullpath[sizeof(fullpath) - 1] = '\0';
+            } else {
+                /*
+                 * Relative path — resolve against the git repo root
+                 * (stored in the git status list if available), or CWD.
+                 */
+                const char *base = ".";
+                Buffer *buf = editor_current_buffer(ed);
+                if (buf && buf->git_state.repo_root)
+                    base = buf->git_state.repo_root;
+                else if (ed->git_status && ed->git_status->repo_root[0])
+                    base = ed->git_status->repo_root;
+                snprintf(fullpath, sizeof(fullpath), "%s/%s",
+                         base, e->filepath);
+            }
+
+            editor_open_or_switch(ed, fullpath);
+
+            /* Move cursor to the error's line and column */
+            ed->cursor_row = e->line - 1;
+            if (ed->cursor_row < 0) ed->cursor_row = 0;
+            Buffer *target = editor_current_buffer(ed);
+            if (target && ed->cursor_row >= target->num_lines)
+                ed->cursor_row = target->num_lines - 1;
+            ed->cursor_col = (e->col > 0) ? e->col - 1 : 0;
+            ed->desired_col = ed->cursor_col;
+
+            editor_scroll(ed);
+            ed->build_panel_focus = 0;  /* return focus to editor */
+        }
+        break;
+
+    case 27:     /* Escape — return focus to editor */
+        ed->build_panel_focus = 0;
+        break;
+
+    case CTRL('w'):   /* Ctrl+W — close the build panel */
+        ed->show_build_panel  = 0;
+        ed->build_panel_focus = 0;
+        editor_scroll(ed);  /* text area expands */
+        break;
+    }
+}
+
+/* ============================================================================
  * input_process_key
  * ============================================================================ */
 
@@ -480,6 +567,16 @@ void input_process_key(struct Editor *ed)
     if (key != KEY_F(9) && ed->git_panel_focus
             && ed->show_git_panel && ed->git_status) {
         input_process_git_panel_key(ed, key);
+        return;
+    }
+
+    /*
+     * Build panel focus routing — same pattern.
+     * F5 always reaches the main handler (so the user can re-build).
+     */
+    if (key != KEY_F(5) && ed->build_panel_focus
+            && ed->show_build_panel && ed->build_result) {
+        input_process_build_panel_key(ed, key);
         return;
     }
 
@@ -725,6 +822,10 @@ void input_process_key(struct Editor *ed)
 
         case CTRL('u'):        /* Ctrl+U — Mark/clear region highlight */
             editor_mark_region(ed);
+            break;
+
+        case KEY_F(5):         /* F5 — Build (run build command) */
+            editor_build(ed);
             break;
 
         case KEY_F(9):         /* F9 — Toggle git status panel */

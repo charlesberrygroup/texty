@@ -15,6 +15,7 @@
 #include "syntax.h"
 #include "filetree.h"   /* for FileTree, FlatEntry, filetree_is_expanded */
 #include "git.h"        /* for GitLineStatus, GitState */
+#include "build.h"      /* for BuildResult, BuildError */
 
 #include <ncurses.h>
 #include <string.h>
@@ -171,6 +172,12 @@ void display_init(void)
 
         /* Blame annotations: dim cyan on default background */
         init_pair(CPAIR_BLAME, COLOR_CYAN, -1);
+
+        /* Build panel */
+        init_pair(CPAIR_BUILD_ERROR,   COLOR_RED,   -1);
+        init_pair(CPAIR_BUILD_WARNING, COLOR_YELLOW, -1);
+        init_pair(CPAIR_BUILD_CURSOR,  COLOR_BLACK, COLOR_WHITE);
+        init_pair(CPAIR_BUILD_SUCCESS, COLOR_GREEN,  -1);
 
         /* Staged files in the git status panel: green (matches git CLI) */
         init_pair(CPAIR_GIT_STAGED, COLOR_GREEN, -1);
@@ -927,6 +934,117 @@ static void draw_git_panel(struct Editor *ed)
     }
 }
 
+/*
+ * draw_build_panel — render the build output panel at the bottom of the screen.
+ *
+ * Layout:
+ *   Row (status_row - BUILD_PANEL_HEIGHT):     horizontal separator + header
+ *   Rows below header:                         error/warning entries
+ *   Row (status_row - 1):                      last entry row
+ *
+ * Each entry shows: "filepath:line: error/warning: message"
+ * Errors are red, warnings are yellow, the cursor entry is highlighted.
+ */
+static void draw_build_panel(struct Editor *ed)
+{
+    BuildResult *br = ed->build_result;
+    if (!br) return;
+
+    int status_row = ed->term_rows - 1;
+    int panel_top  = status_row - BUILD_PANEL_HEIGHT;
+    int entry_rows = BUILD_PANEL_HEIGHT - 1;  /* one row for header */
+
+    /* Scroll adjustment — keep cursor visible */
+    if (ed->build_panel_cursor < ed->build_panel_scroll)
+        ed->build_panel_scroll = ed->build_panel_cursor;
+    if (ed->build_panel_cursor >= ed->build_panel_scroll + entry_rows)
+        ed->build_panel_scroll = ed->build_panel_cursor - entry_rows + 1;
+    if (ed->build_panel_scroll < 0)
+        ed->build_panel_scroll = 0;
+
+    /* ---- Header row: separator + build status ---- */
+    move(panel_top, 0);
+
+    /*
+     * Draw a horizontal line across the full width to visually separate
+     * the build panel from the editor area above it.
+     */
+    attron(A_BOLD);
+    for (int c = 0; c < ed->term_cols; c++)
+        addch(ACS_HLINE);
+
+    /* Overwrite the left portion with the header text */
+    int errs = 0, warns = 0;
+    for (int i = 0; i < br->error_count; i++) {
+        if (br->errors[i].is_warning) warns++;
+        else errs++;
+    }
+
+    move(panel_top, 1);
+    if (br->exit_status == 0) {
+        attron(COLOR_PAIR(CPAIR_BUILD_SUCCESS));
+        printw(" Build OK ");
+        attroff(COLOR_PAIR(CPAIR_BUILD_SUCCESS));
+        if (warns > 0) {
+            attron(COLOR_PAIR(CPAIR_BUILD_WARNING));
+            printw("(%d warning%s)", warns, warns > 1 ? "s" : "");
+            attroff(COLOR_PAIR(CPAIR_BUILD_WARNING));
+        }
+    } else {
+        attron(COLOR_PAIR(CPAIR_BUILD_ERROR));
+        printw(" Build FAILED ");
+        attroff(COLOR_PAIR(CPAIR_BUILD_ERROR));
+        if (errs > 0 || warns > 0)
+            printw("(%d error%s, %d warning%s)",
+                   errs, errs != 1 ? "s" : "",
+                   warns, warns != 1 ? "s" : "");
+    }
+    attroff(A_BOLD);
+
+    /* ---- Entry rows ---- */
+    for (int r = 0; r < entry_rows; r++) {
+        int screen_row = panel_top + 1 + r;
+        int idx        = ed->build_panel_scroll + r;
+
+        move(screen_row, 0);
+
+        if (idx >= br->error_count) {
+            /* Past last entry — blank row */
+            clrtoeol();
+            continue;
+        }
+
+        BuildError *e  = &br->errors[idx];
+        int is_cursor  = (idx == ed->build_panel_cursor);
+
+        /*
+         * Format: " filepath:line: message"
+         * Truncated to fit the terminal width.
+         */
+        char line_buf[512];
+        if (e->col > 0)
+            snprintf(line_buf, sizeof(line_buf), " %s:%d:%d: %s",
+                     e->filepath, e->line, e->col, e->message);
+        else
+            snprintf(line_buf, sizeof(line_buf), " %s:%d: %s",
+                     e->filepath, e->line, e->message);
+
+        if (is_cursor && ed->build_panel_focus) {
+            attron(COLOR_PAIR(CPAIR_BUILD_CURSOR) | A_BOLD);
+            printw("%-*.*s", ed->term_cols, ed->term_cols, line_buf);
+            attroff(COLOR_PAIR(CPAIR_BUILD_CURSOR) | A_BOLD);
+        } else {
+            int cpair = e->is_warning ? CPAIR_BUILD_WARNING
+                                       : CPAIR_BUILD_ERROR;
+            if (is_cursor) attron(A_BOLD);
+            attron(COLOR_PAIR(cpair));
+            printw("%-*.*s", ed->term_cols, ed->term_cols, line_buf);
+            attroff(COLOR_PAIR(cpair));
+            if (is_cursor) attroff(A_BOLD);
+        }
+    }
+}
+
 static void draw_editor_area(struct Editor *ed)
 {
     Buffer *buf = editor_current_buffer(ed);
@@ -945,6 +1063,9 @@ static void draw_editor_area(struct Editor *ed)
      * for the tab bar at the top.
      */
     int text_rows = ed->term_rows - 1 - TAB_BAR_HEIGHT;
+    if (ed->show_build_panel && ed->build_result)
+        text_rows -= BUILD_PANEL_HEIGHT;
+    if (text_rows < 1) text_rows = 1;
 
     /*
      * Pre-compute selection bounds once, outside the row loop.
@@ -1729,6 +1850,9 @@ void display_render(struct Editor *ed)
 
     if (ed->show_git_panel && ed->git_status)
         draw_git_panel(ed);
+
+    if (ed->show_build_panel && ed->build_result)
+        draw_build_panel(ed);
 
     draw_status_bar(ed);
 

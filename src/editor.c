@@ -14,6 +14,7 @@
 #include "undo.h"
 #include "filetree.h"   /* for FileTree, filetree_create, filetree_rebuild, etc. */
 #include "git.h"        /* for git_refresh — called on open/save */
+#include "build.h"      /* for build_run, build_load_config, etc. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -184,7 +185,15 @@ static void insert_text_at(Buffer *buf, int row, int col,
  */
 static int editor_rows(const Editor *ed)
 {
-    return ed->term_rows - 1 - TAB_BAR_HEIGHT;
+    int rows = ed->term_rows - 1 - TAB_BAR_HEIGHT;
+    /*
+     * When the build panel is visible, it occupies rows at the bottom
+     * of the text area (above the status bar).  Subtract its height.
+     */
+    if (ed->show_build_panel && ed->build_result)
+        rows -= BUILD_PANEL_HEIGHT;
+    if (rows < 1) rows = 1;
+    return rows;
 }
 
 /*
@@ -262,6 +271,13 @@ void editor_cleanup(Editor *ed)
 
     /* Free blame data */
     git_blame_free(&ed->git_blame);
+
+    /* Free build result */
+    if (ed->build_result) {
+        build_result_free(ed->build_result);
+        free(ed->build_result);
+        ed->build_result = NULL;
+    }
 }
 
 /* ============================================================================
@@ -2115,6 +2131,93 @@ void editor_stage_panel_file(Editor *ed)
     } else {
         editor_set_status(ed, "Failed to stage: %s", path_copy);
     }
+}
+
+/* ============================================================================
+ * Build system
+ * ============================================================================ */
+
+void editor_build(Editor *ed)
+{
+    /*
+     * Determine the working directory for the build.
+     * Use the git repo root if available, otherwise the directory of the
+     * current buffer's file, otherwise CWD.
+     */
+    char *root = get_repo_root(ed);
+    const char *work_dir = root;
+    char buf_dir[2048] = "";
+
+    if (!work_dir) {
+        Buffer *buf = editor_current_buffer(ed);
+        if (buf && buf->filename) {
+            strncpy(buf_dir, buf->filename, sizeof(buf_dir) - 1);
+            buf_dir[sizeof(buf_dir) - 1] = '\0';
+            char *slash = strrchr(buf_dir, '/');
+            if (slash) *slash = '\0';
+            else strcpy(buf_dir, ".");
+            work_dir = buf_dir;
+        } else {
+            work_dir = ".";
+        }
+    }
+
+    /*
+     * Load the build command from texty.json on first invocation.
+     * If no config file is found, defaults to "make".
+     */
+    if (ed->build_command[0] == '\0')
+        build_load_config(ed->build_command, sizeof(ed->build_command),
+                          work_dir);
+
+    /* Allocate the build result on first use */
+    if (!ed->build_result) {
+        ed->build_result = malloc(sizeof(BuildResult));
+        if (!ed->build_result) {
+            free(root);
+            editor_set_status(ed, "Error: out of memory");
+            return;
+        }
+        memset(ed->build_result, 0, sizeof(BuildResult));
+    }
+
+    /*
+     * Show "Building..." before the blocking popen call so the user
+     * knows the editor hasn't frozen.
+     */
+    editor_set_status(ed, "Building: %s ...", ed->build_command);
+    display_render(ed);
+
+    /* Run the build (this blocks until the command finishes) */
+    int result = build_run(ed->build_result, ed->build_command, work_dir);
+    free(root);
+
+    if (result != 0) {
+        editor_set_status(ed, "Build command failed to execute.");
+        return;
+    }
+
+    /* Show the build panel */
+    ed->show_build_panel  = 1;
+    ed->build_panel_focus = 1;
+    ed->build_panel_cursor = 0;
+    ed->build_panel_scroll = 0;
+
+    /* Scroll adjustment since text area height changed */
+    editor_scroll(ed);
+
+    /* Status message with results */
+    int errs = 0, warns = 0;
+    for (int i = 0; i < ed->build_result->error_count; i++) {
+        if (ed->build_result->errors[i].is_warning) warns++;
+        else errs++;
+    }
+
+    if (ed->build_result->exit_status == 0)
+        editor_set_status(ed, "Build succeeded. %d warning(s).", warns);
+    else
+        editor_set_status(ed, "Build failed: %d error(s), %d warning(s).",
+                          errs, warns);
 }
 
 /* ============================================================================

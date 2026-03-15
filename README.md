@@ -27,6 +27,8 @@ A terminal-based IDE written in C, built from scratch.
 - Syntax highlighting for C, C++, Python, JavaScript, TypeScript, Rust, Go, JSON, Markdown, Shell, and Makefile
 - Region highlight (Ctrl+U) — mark lines with a visible box border
 - File explorer panel (Ctrl+B) — browse, open, create, rename, and delete files
+- Build system integration (F5) — run build commands, parse errors, jump to error locations
+- Configurable build command via texty.json (`{"build_command": "make -j4"}`)
 - Git gutter — colored markers for added (+), modified (~), and deleted (_) lines
 - Git status panel (F9) — right-side panel listing changed files
 - Git blame (Shift+F9) — per-line author and date annotations
@@ -142,6 +144,25 @@ Produces the `./texty` binary.
 > focused → editor focused (panel visible). Opening a file that is already in
 > an open buffer switches to that buffer instead of creating a duplicate.
 
+### Build
+
+| Key              | Action                                          |
+|------------------|-------------------------------------------------|
+| F5               | Run build command (shows build panel)           |
+
+> **Note:** The default build command is `make`. To customize, create a
+> `texty.json` file in your project root: `{"build_command": "cmake --build build"}`
+
+#### Build panel (F5)
+
+| Key              | Action                                          |
+|------------------|-------------------------------------------------|
+| Up / Down        | Navigate error entries                          |
+| Enter            | Jump to error location (opens file, moves cursor)|
+| Escape           | Return focus to editor (panel stays open)       |
+| Ctrl+W           | Close the build panel                           |
+| F5               | Re-run the build                                |
+
 ### Git
 
 | Key              | Action                                          |
@@ -190,6 +211,7 @@ src/
   syntax.h/c    — Syntax highlighting (C, Python, JS, Rust, Go, and more)
   filetree.h/c  — File explorer tree logic
   git.h/c       — Git integration (gutter, blame, diff, staging, commit)
+  build.h/c     — Build system (run command, parse errors, config)
 Makefile
 TODO.md         — Phased development roadmap
 ```

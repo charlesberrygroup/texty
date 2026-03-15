@@ -132,6 +132,28 @@ struct Editor;
  */
 #define BLAME_WIDTH            23
 
+/* ---- Build panel ---------------------------------------------------------- */
+
+/**
+ * BUILD_PANEL_HEIGHT — number of rows occupied by the build output panel.
+ *
+ * Includes 1 header row + 7 entry rows = 8 total.  Drawn at the bottom
+ * of the text area, above the status bar.
+ */
+#define BUILD_PANEL_HEIGHT  8
+
+/** CPAIR_BUILD_ERROR — red text for error entries in the build panel. */
+#define CPAIR_BUILD_ERROR   29
+
+/** CPAIR_BUILD_WARNING — yellow text for warning entries in the build panel. */
+#define CPAIR_BUILD_WARNING 30
+
+/** CPAIR_BUILD_CURSOR — highlighted entry in the build panel (black on white). */
+#define CPAIR_BUILD_CURSOR  31
+
+/** CPAIR_BUILD_SUCCESS — green text for "Build succeeded" header. */
+#define CPAIR_BUILD_SUCCESS 32
+
 /* ---- Functions ------------------------------------------------------------ */
 
 /**
