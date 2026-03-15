@@ -696,6 +696,39 @@ void input_process_key(struct Editor *ed)
             break;
 
         /* ------------------------------------------------------------------ *
+         * Terminal resize
+         *
+         * When the user resizes their terminal window, the OS sends SIGWINCH
+         * to the process.  ncurses catches that signal automatically (because
+         * we called keypad(TRUE) in display_init) and the next getch() call
+         * returns the special constant KEY_RESIZE instead of a normal key.
+         *
+         * At that point ncurses has already updated the global LINES and COLS
+         * variables to the new dimensions.  We need to do two things:
+         *
+         * When ncurses delivers KEY_RESIZE it has ALREADY handled the signal
+         * internally: LINES and COLS are updated and stdscr has been resized.
+         * Calling resizeterm() again at this point resets the terminal's raw
+         * mode on macOS, causing getch() to fall back to cooked mode and the
+         * editor to appear unresponsive.  So we do NOT call resizeterm() here.
+         *
+         * What we do need to do:
+         *
+         *   1. display_update_size(ed) — copy the new LINES/COLS values into
+         *      ed->term_rows / ed->term_cols so all layout calculations
+         *      (editor_rows(), editor_cols(), scroll clamping, …) use the
+         *      fresh dimensions.
+         *
+         *   2. editor_scroll(ed) — re-clamp the viewport.  If the window
+         *      shrank, the cursor may now be outside the visible area; scroll
+         *      brings it back into view.
+         * ------------------------------------------------------------------ */
+        case KEY_RESIZE:
+            display_update_size(ed);
+            editor_scroll(ed);
+            break;
+
+        /* ------------------------------------------------------------------ *
          * Default: printable characters
          * ------------------------------------------------------------------ */
 
