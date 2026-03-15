@@ -138,7 +138,7 @@ that all future phases will build on.
 - [x] Git status panel
 - [x] Inline diff view
 - [x] Stage hunks
-- [ ] Commit from editor
+- [x] Commit from editor
 
 ### Navigation & Search
 - [ ] Fuzzy file finder (Ctrl+P)
