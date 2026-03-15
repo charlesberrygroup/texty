@@ -149,9 +149,20 @@ static void fill_dir(FileTree *ft, const char *dir_path, int depth)
      * everything first, sort it, then add it to the flat list.
      *
      * Max 1024 items per directory — sufficient for almost any real project.
+     *
+     * IMPORTANT: We heap-allocate (malloc) instead of stack-allocating this
+     * array.  Each DirItem is ~1284 bytes, so 1024 of them is ~1.25 MB.
+     * fill_dir() is recursive (it calls itself for each expanded sub-directory),
+     * so a stack array would accumulate ~1.25 MB per nesting level.  With the
+     * typical 8 MB stack limit, only 6-7 levels of expansion would cause a
+     * stack overflow crash.  Heap allocation avoids this entirely.
      */
-    DirItem items[1024];
-    int     item_count = 0;
+    DirItem *items = malloc(1024 * sizeof(DirItem));
+    if (!items) {
+        closedir(dir);
+        return;
+    }
+    int item_count = 0;
 
     /*
      * readdir() returns a pointer to a struct dirent describing the next
@@ -247,11 +258,22 @@ static void fill_dir(FileTree *ft, const char *dir_path, int depth)
          * recurse into it to add its children right below it in the flat list.
          *
          * The children will have depth+1, which makes them render indented.
+         *
+         * NOTE: items[] has already been freed at the point of recursion?
+         * No — free(items) is called AFTER this loop, so items is still valid
+         * while we iterate.  The recursive fill_dir() call allocates its OWN
+         * items array on the heap; it does not touch our items array.
          */
         if (e->is_dir && filetree_is_expanded(ft, e->path)) {
             fill_dir(ft, e->path, depth + 1);
         }
     }
+
+    /*
+     * Release the heap-allocated temporary array.
+     * This must be done after the loop because we read items[i] throughout it.
+     */
+    free(items);
 }
 
 /* ============================================================================
@@ -374,10 +396,18 @@ void filetree_toggle(FileTree *ft, int idx)
                 continue;
             }
 
-            /* Keep this entry */
-            strncpy(ft->expanded[new_count], ep,
-                    sizeof(ft->expanded[new_count]) - 1);
-            ft->expanded[new_count][sizeof(ft->expanded[new_count]) - 1] = '\0';
+            /* Keep this entry.
+             *
+             * Only copy when the destination slot differs from the source slot.
+             * When new_count == i, both point to the same element — strncpy
+             * with identical src and dst is undefined behaviour and traps on
+             * macOS's optimised strncpy implementation.
+             */
+            if (new_count != i) {
+                strncpy(ft->expanded[new_count], ep,
+                        sizeof(ft->expanded[new_count]) - 1);
+                ft->expanded[new_count][sizeof(ft->expanded[new_count]) - 1] = '\0';
+            }
             new_count++;
         }
         ft->expanded_count = new_count;

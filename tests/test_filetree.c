@@ -496,6 +496,82 @@ TEST(test_collapse_clears_nested_expanded)
 }
 
 /* ============================================================================
+ * Test: collapse depth-1 subdirectory while parent stays expanded
+ *
+ * This is a regression test for a crash caused by strncpy() being called
+ * with identical src and dst pointers in the filetree_toggle() collapse loop.
+ *
+ * Scenario:
+ *   1. Expand a root-level directory (parent/).
+ *   2. Expand a subdirectory inside it (parent/child/).
+ *   3. Collapse child/ while parent/ remains expanded.
+ *
+ * Before the fix, step 3 crashed because the collapse loop called
+ *   strncpy(expanded[0], expanded[0], ...)
+ * — a self-copy — when the first entry in expanded[] did not need to be
+ * removed.  macOS's optimised strncpy traps on overlapping src/dst.
+ * ============================================================================ */
+
+TEST(test_collapse_depth1_child_while_parent_expanded)
+{
+    /*
+     * Directory layout:
+     *   <tmpdir>/
+     *     parent/
+     *       child/       <-- the empty subdirectory we expand then collapse
+     *       sibling.txt
+     *     root_file.txt
+     */
+    char tmpdir[] = "/tmp/texty_XXXXXX";
+    char *result  = mkdtemp(tmpdir);
+    ASSERT(result != NULL, "mkdtemp created temp dir");
+    if (!result) return;
+
+    char parent[1024], child[1024], sibling[1024], root_file[1024];
+    snprintf(parent,    sizeof(parent),    "%s/parent",           tmpdir);
+    snprintf(child,     sizeof(child),     "%s/parent/child",     tmpdir);
+    snprintf(sibling,   sizeof(sibling),   "%s/parent/sibling.txt", tmpdir);
+    snprintf(root_file, sizeof(root_file), "%s/root_file.txt",    tmpdir);
+
+    mkdir(parent, 0755);
+    mkdir(child,  0755);
+    touch(sibling);
+    touch(root_file);
+
+    FileTree *ft = filetree_create(tmpdir);
+    ASSERT(ft != NULL, "filetree_create returned non-NULL");
+    if (!ft) { rmdir(child); unlink(sibling); rmdir(parent); unlink(root_file); rmdir(tmpdir); return; }
+
+    /* Step 1: expand parent/ (index 0) */
+    ASSERT(ft->count == 2, "initially 2 entries: parent/ + root_file.txt");
+    filetree_toggle(ft, 0);
+    ASSERT(filetree_is_expanded(ft, parent) == 1, "parent/ is expanded");
+    /* parent/, child/, sibling.txt, root_file.txt */
+    ASSERT(ft->count == 4, "4 entries after expanding parent/");
+
+    /* Step 2: expand child/ (index 1, depth 1) */
+    ASSERT(ft->entries[1].is_dir == 1,                     "entry[1] is a directory");
+    ASSERT(strcmp(ft->entries[1].name, "child") == 0,      "entry[1] is child/");
+    filetree_toggle(ft, 1);
+    ASSERT(filetree_is_expanded(ft, child) == 1, "child/ is expanded");
+    /* child/ is empty so count stays the same */
+    ASSERT(ft->count == 4, "count unchanged (child/ is empty)");
+
+    /* Step 3: collapse child/ — this previously crashed via strncpy self-overlap */
+    filetree_toggle(ft, 1);
+    ASSERT(filetree_is_expanded(ft, child)  == 0, "child/ is collapsed");
+    ASSERT(filetree_is_expanded(ft, parent) == 1, "parent/ is still expanded");
+    ASSERT(ft->count == 4, "count still 4 (child/ was empty)");
+
+    filetree_free(ft);
+    rmdir(child);
+    unlink(sibling);
+    rmdir(parent);
+    unlink(root_file);
+    rmdir(tmpdir);
+}
+
+/* ============================================================================
  * main
  * ============================================================================ */
 
@@ -511,6 +587,7 @@ int main(void)
     RUN(test_free_null_is_safe);
     RUN(test_hidden_entries_excluded);
     RUN(test_collapse_clears_nested_expanded);
+    RUN(test_collapse_depth1_child_while_parent_expanded);
 
     TEST_SUMMARY();
 }

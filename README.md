@@ -24,6 +24,7 @@ A terminal-based IDE written in C, built from scratch.
 - Status bar with filename, cursor position, and modified indicator
 - Horizontal and vertical scrolling
 - Terminal resize support
+- File explorer panel (Ctrl+B) — browse, open, create, rename, and delete files
 
 ## Requirements
 
@@ -110,6 +111,28 @@ Produces the `./texty` binary.
 > **Note:** Search is case-sensitive. Ctrl+H cannot be used for Replace because
 > it maps to the same byte as Backspace in most terminals.
 
+### File explorer
+
+| Key              | Action                                          |
+|------------------|-------------------------------------------------|
+| Ctrl+B           | Open explorer and focus it                      |
+| Ctrl+B           | Return focus to editor (panel stays open)       |
+| Ctrl+B           | Focus explorer again (highlights current file)  |
+| Escape           | Return focus to editor (panel stays open)       |
+| Ctrl+W           | Close the explorer panel                        |
+| Up / Down        | Move cursor                                     |
+| Right            | Expand directory                                |
+| Left             | Collapse directory                              |
+| Enter            | Open file / toggle directory                    |
+| `n`              | New file (prompts for name)                     |
+| `N`              | New directory (prompts for name)                |
+| `r`              | Rename entry (prompts for new name)             |
+| `d`              | Delete entry (confirms before deleting)         |
+
+> **Note:** Ctrl+B cycles through three states: explorer hidden → explorer
+> focused → editor focused (panel visible). Opening a file that is already in
+> an open buffer switches to that buffer instead of creating a duplicate.
+
 ### File
 
 | Key              | Action                               |
@@ -124,12 +147,14 @@ Produces the `./texty` binary.
 
 ```
 src/
-  main.c      — Entry point and event loop
-  buffer.h/c  — Text buffer (array of lines)
-  editor.h/c  — Editor state, cursor movement, text operations
-  display.h/c — ncurses terminal rendering
-  input.h/c   — Keyboard input dispatch
-  undo.h/c    — Undo / redo stack
+  main.c        — Entry point and event loop
+  buffer.h/c    — Text buffer (array of lines)
+  editor.h/c    — Editor state, cursor movement, text operations
+  display.h/c   — ncurses terminal rendering
+  input.h/c     — Keyboard input dispatch
+  undo.h/c      — Undo / redo stack
+  syntax.h/c    — Syntax highlighting (C, Python, JS, Rust, Go, and more)
+  filetree.h/c  — File explorer tree logic
 Makefile
-TODO.md       — Phased development roadmap
+TODO.md         — Phased development roadmap
 ```
