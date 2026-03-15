@@ -64,8 +64,8 @@ TEST(test_init_creates_buffer)
     Editor ed;
     make_editor(&ed);
     ASSERT(ed.num_buffers == 1,       "one buffer after init");
-    ASSERT(ed.active_pane->cursor_row  == 0,       "cursor starts at row 0");
-    ASSERT(ed.active_pane->cursor_col  == 0,       "cursor starts at col 0");
+    ASSERT(ed.cursor_row  == 0,       "cursor starts at row 0");
+    ASSERT(ed.cursor_col  == 0,       "cursor starts at col 0");
     ASSERT(num_lines(&ed) == 1,       "buffer has one line");
     editor_cleanup(&ed);
 }
@@ -79,7 +79,7 @@ TEST(test_insert_char_advances_cursor)
     Editor ed;
     make_editor(&ed);
     editor_insert_char(&ed, 'a');
-    ASSERT(ed.active_pane->cursor_col == 1,                    "cursor advances after insert");
+    ASSERT(ed.cursor_col == 1,                    "cursor advances after insert");
     ASSERT(strcmp(line(&ed, 0), "a") == 0,        "line contains 'a'");
     editor_cleanup(&ed);
 }
@@ -91,7 +91,7 @@ TEST(test_insert_multiple_chars)
     editor_insert_char(&ed, 'f');
     editor_insert_char(&ed, 'o');
     editor_insert_char(&ed, 'o');
-    ASSERT(ed.active_pane->cursor_col == 3,                      "cursor at col 3");
+    ASSERT(ed.cursor_col == 3,                      "cursor at col 3");
     ASSERT(strcmp(line(&ed, 0), "foo") == 0,        "line is 'foo'");
     editor_cleanup(&ed);
 }
@@ -103,7 +103,7 @@ TEST(test_backspace_deletes_char)
     editor_insert_char(&ed, 'a');
     editor_insert_char(&ed, 'b');
     editor_backspace(&ed);   /* removes 'b' */
-    ASSERT(ed.active_pane->cursor_col == 1,                     "cursor back at col 1");
+    ASSERT(ed.cursor_col == 1,                     "cursor back at col 1");
     ASSERT(strcmp(line(&ed, 0), "a") == 0,         "line is 'a'");
     editor_cleanup(&ed);
 }
@@ -129,8 +129,8 @@ TEST(test_backspace_at_col0_joins_lines)
 
     ASSERT(num_lines(&ed) == 1,                          "1 line after join");
     ASSERT(strcmp(line(&ed, 0), "foobar") == 0,          "joined content");
-    ASSERT(ed.active_pane->cursor_row == 0,                           "cursor on row 0");
-    ASSERT(ed.active_pane->cursor_col == 3,                           "cursor at join point");
+    ASSERT(ed.cursor_row == 0,                           "cursor on row 0");
+    ASSERT(ed.cursor_col == 3,                           "cursor at join point");
     editor_cleanup(&ed);
 }
 
@@ -143,7 +143,7 @@ TEST(test_delete_char_removes_under_cursor)
     editor_move_line_start(&ed);   /* cursor at col 0 */
     editor_delete_char(&ed);       /* deletes 'a' */
     ASSERT(strcmp(line(&ed, 0), "b") == 0,  "delete_char removes char under cursor");
-    ASSERT(ed.active_pane->cursor_col == 0,              "cursor stays at col 0");
+    ASSERT(ed.cursor_col == 0,              "cursor stays at col 0");
     editor_cleanup(&ed);
 }
 
@@ -164,7 +164,7 @@ TEST(test_insert_newline_splits)
     ASSERT(num_lines(&ed) == 2,                        "2 lines after newline");
     ASSERT(strcmp(line(&ed, 0), "a") == 0,             "line 0 is 'a'");
     ASSERT(strcmp(line(&ed, 1), "b") == 0,             "line 1 is 'b'");
-    ASSERT(ed.active_pane->cursor_row == 1,                         "cursor on line 1");
+    ASSERT(ed.cursor_row == 1,                         "cursor on line 1");
     editor_cleanup(&ed);
 }
 
@@ -182,8 +182,8 @@ TEST(test_auto_indent_copies_leading_spaces)
     editor_insert_char(&ed, 'i');
     editor_insert_newline(&ed);
 
-    ASSERT(ed.active_pane->cursor_row == 1,                   "cursor on new line");
-    ASSERT(ed.active_pane->cursor_col == 2,                   "cursor after 2-space indent");
+    ASSERT(ed.cursor_row == 1,                   "cursor on new line");
+    ASSERT(ed.cursor_col == 2,                   "cursor after 2-space indent");
     ASSERT(line(&ed, 1)[0] == ' ',               "new line starts with space");
     ASSERT(line(&ed, 1)[1] == ' ',               "second char is also space");
     editor_cleanup(&ed);
@@ -197,7 +197,7 @@ TEST(test_auto_indent_no_indent_for_empty_line)
     editor_insert_char(&ed, 'x');
     editor_insert_newline(&ed);
 
-    ASSERT(ed.active_pane->cursor_col == 0,              "cursor at col 0 — no indent");
+    ASSERT(ed.cursor_col == 0,              "cursor at col 0 — no indent");
     ASSERT(line_len(&ed, 1) == 0,           "new line is empty");
     editor_cleanup(&ed);
 }
@@ -213,7 +213,7 @@ TEST(test_insert_tab_inserts_spaces)
     editor_insert_tab(&ed);
 
     /* Default tab_width is 4 */
-    ASSERT(ed.active_pane->cursor_col == 4,              "cursor at col 4 after tab");
+    ASSERT(ed.cursor_col == 4,              "cursor at col 4 after tab");
     ASSERT(line_len(&ed, 0) == 4,           "line length is 4");
     ASSERT(line(&ed, 0)[0] == ' ',          "inserted spaces, not tab char");
     editor_cleanup(&ed);
@@ -231,9 +231,9 @@ TEST(test_move_left_right)
     editor_insert_char(&ed, 'b');
     /* cursor is at col 2 */
     editor_move_left(&ed);
-    ASSERT(ed.active_pane->cursor_col == 1, "move_left decrements col");
+    ASSERT(ed.cursor_col == 1, "move_left decrements col");
     editor_move_right(&ed);
-    ASSERT(ed.active_pane->cursor_col == 2, "move_right increments col");
+    ASSERT(ed.cursor_col == 2, "move_right increments col");
     editor_cleanup(&ed);
 }
 
@@ -246,8 +246,8 @@ TEST(test_move_left_wraps_to_prev_line)
     editor_insert_newline(&ed);
     /* cursor is at row 1 col 0 */
     editor_move_left(&ed);
-    ASSERT(ed.active_pane->cursor_row == 0,       "cursor moved to row 0");
-    ASSERT(ed.active_pane->cursor_col == 1,       "cursor at end of line 0");
+    ASSERT(ed.cursor_row == 0,       "cursor moved to row 0");
+    ASSERT(ed.cursor_col == 1,       "cursor at end of line 0");
     editor_cleanup(&ed);
 }
 
@@ -260,9 +260,9 @@ TEST(test_move_up_down)
     editor_insert_char(&ed, 'b');
     /* cursor on row 1 */
     editor_move_up(&ed);
-    ASSERT(ed.active_pane->cursor_row == 0, "move_up goes to row 0");
+    ASSERT(ed.cursor_row == 0, "move_up goes to row 0");
     editor_move_down(&ed);
-    ASSERT(ed.active_pane->cursor_row == 1, "move_down goes back to row 1");
+    ASSERT(ed.cursor_row == 1, "move_down goes back to row 1");
     editor_cleanup(&ed);
 }
 
@@ -274,9 +274,9 @@ TEST(test_move_line_start_end)
     editor_insert_char(&ed, 'b');
     editor_insert_char(&ed, 'c');
     editor_move_line_start(&ed);
-    ASSERT(ed.active_pane->cursor_col == 0, "move_line_start goes to col 0");
+    ASSERT(ed.cursor_col == 0, "move_line_start goes to col 0");
     editor_move_line_end(&ed);
-    ASSERT(ed.active_pane->cursor_col == 3, "move_line_end goes to end");
+    ASSERT(ed.cursor_col == 3, "move_line_end goes to end");
     editor_cleanup(&ed);
 }
 
@@ -286,10 +286,10 @@ TEST(test_move_clamps_at_boundaries)
     make_editor(&ed);
     /* Moving up from row 0 should stay at row 0 */
     editor_move_up(&ed);
-    ASSERT(ed.active_pane->cursor_row == 0, "move_up clamped at row 0");
+    ASSERT(ed.cursor_row == 0, "move_up clamped at row 0");
     /* Moving left from col 0 on the only line should stay at col 0 */
     editor_move_left(&ed);
-    ASSERT(ed.active_pane->cursor_col == 0, "move_left clamped at col 0 on first line");
+    ASSERT(ed.cursor_col == 0, "move_left clamped at col 0 on first line");
     editor_cleanup(&ed);
 }
 
@@ -304,7 +304,7 @@ TEST(test_undo_insert_char)
     editor_insert_char(&ed, 'x');
     editor_undo(&ed);
     ASSERT(line_len(&ed, 0) == 0,    "undo removes inserted char");
-    ASSERT(ed.active_pane->cursor_col == 0,       "cursor back at col 0");
+    ASSERT(ed.cursor_col == 0,       "cursor back at col 0");
     editor_cleanup(&ed);
 }
 
@@ -316,7 +316,7 @@ TEST(test_redo_insert_char)
     editor_undo(&ed);
     editor_redo(&ed);
     ASSERT(line_len(&ed, 0) == 1,    "redo re-inserts char");
-    ASSERT(ed.active_pane->cursor_col == 1,       "cursor at col 1 after redo");
+    ASSERT(ed.cursor_col == 1,       "cursor at col 1 after redo");
     editor_cleanup(&ed);
 }
 
@@ -381,14 +381,14 @@ TEST(test_goto_line_moves_cursor)
     Buffer *buf = editor_current_buffer(&ed);
     int row = 2;   /* 1-based line 3 */
     if (row >= buf->num_lines) row = buf->num_lines - 1;
-    ed.active_pane->cursor_row  = row;
-    ed.active_pane->cursor_col  = 0;
-    ed.active_pane->desired_col = 0;
+    ed.cursor_row  = row;
+    ed.cursor_col  = 0;
+    ed.desired_col = 0;
     editor_selection_clear(&ed);
     editor_scroll(&ed);
 
-    ASSERT(ed.active_pane->cursor_row == 2, "cursor moved to row 2 (line 3)");
-    ASSERT(ed.active_pane->cursor_col == 0, "cursor at col 0");
+    ASSERT(ed.cursor_row == 2, "cursor moved to row 2 (line 3)");
+    ASSERT(ed.cursor_col == 0, "cursor at col 0");
     editor_cleanup(&ed);
 }
 
@@ -401,12 +401,12 @@ TEST(test_goto_line_clamps_to_last)
     Buffer *buf = editor_current_buffer(&ed);
     int row = 999;
     if (row >= buf->num_lines) row = buf->num_lines - 1;
-    ed.active_pane->cursor_row  = row;
-    ed.active_pane->cursor_col  = 0;
-    ed.active_pane->desired_col = 0;
+    ed.cursor_row  = row;
+    ed.cursor_col  = 0;
+    ed.desired_col = 0;
     editor_scroll(&ed);
 
-    ASSERT(ed.active_pane->cursor_row == 0, "out-of-range line clamped to last row");
+    ASSERT(ed.cursor_row == 0, "out-of-range line clamped to last row");
     editor_cleanup(&ed);
 }
 
@@ -423,11 +423,11 @@ TEST(test_select_all)
     editor_insert_char(&ed, 'b');
     editor_select_all(&ed);
 
-    ASSERT(ed.active_pane->sel_active,              "selection is active");
-    ASSERT(ed.active_pane->sel_anchor_row == 0,     "anchor at row 0");
-    ASSERT(ed.active_pane->sel_anchor_col == 0,     "anchor at col 0");
-    ASSERT(ed.active_pane->cursor_row == 1,         "cursor at last row");
-    ASSERT(ed.active_pane->cursor_col == 1,         "cursor at end of last line");
+    ASSERT(ed.sel_active,              "selection is active");
+    ASSERT(ed.sel_anchor_row == 0,     "anchor at row 0");
+    ASSERT(ed.sel_anchor_col == 0,     "anchor at col 0");
+    ASSERT(ed.cursor_row == 1,         "cursor at last row");
+    ASSERT(ed.cursor_col == 1,         "cursor at end of last line");
     editor_cleanup(&ed);
 }
 
@@ -447,9 +447,9 @@ static int bracket_match(Editor *ed, const char *text, int col,
     for (int i = 0; text[i]; i++)
         editor_insert_char(ed, text[i]);
     /* Move cursor to the requested column */
-    ed->active_pane->cursor_row  = 0;
-    ed->active_pane->cursor_col  = col;
-    ed->active_pane->desired_col = col;
+    ed->cursor_row  = 0;
+    ed->cursor_col  = col;
+    ed->desired_col = col;
     return editor_find_bracket_match(ed, mr, mc);
 }
 
@@ -532,8 +532,8 @@ TEST(test_bracket_match_multiline)
     editor_insert_char(&ed, '(');
     editor_insert_newline(&ed);
     editor_insert_char(&ed, ')');
-    ed.active_pane->cursor_row = 0;
-    ed.active_pane->cursor_col = 0;
+    ed.cursor_row = 0;
+    ed.cursor_col = 0;
     int mr, mc;
     int found = editor_find_bracket_match(&ed, &mr, &mc);
     ASSERT(found == 1,  "multiline match found");
@@ -547,8 +547,8 @@ TEST(test_bracket_match_not_a_bracket)
     /* Cursor on a non-bracket character — no match */
     Editor ed; make_editor(&ed);
     editor_insert_char(&ed, 'x');
-    ed.active_pane->cursor_row = 0;
-    ed.active_pane->cursor_col = 0;
+    ed.cursor_row = 0;
+    ed.cursor_col = 0;
     int mr, mc;
     int found = editor_find_bracket_match(&ed, &mr, &mc);
     ASSERT(found == 0, "no match for non-bracket character");
@@ -560,8 +560,8 @@ TEST(test_bracket_match_unmatched)
     /* "(" with no closing ')' — no match */
     Editor ed; make_editor(&ed);
     editor_insert_char(&ed, '(');
-    ed.active_pane->cursor_row = 0;
-    ed.active_pane->cursor_col = 0;
+    ed.cursor_row = 0;
+    ed.cursor_col = 0;
     int mr, mc;
     int found = editor_find_bracket_match(&ed, &mr, &mc);
     ASSERT(found == 0, "no match for unmatched bracket");
@@ -573,8 +573,8 @@ TEST(test_bracket_match_cursor_past_eol)
     /* Cursor is past end of line — no match */
     Editor ed; make_editor(&ed);
     editor_insert_char(&ed, '(');
-    ed.active_pane->cursor_row = 0;
-    ed.active_pane->cursor_col = 5;   /* past end of 1-char line */
+    ed.cursor_row = 0;
+    ed.cursor_col = 5;   /* past end of 1-char line */
     int mr, mc;
     int found = editor_find_bracket_match(&ed, &mr, &mc);
     ASSERT(found == 0, "no match when cursor past EOL");
@@ -594,7 +594,7 @@ TEST(test_autoclose_paren)
     Editor ed; make_editor(&ed);
     editor_insert_pair(&ed, '(', ')');
     ASSERT(strcmp(line(&ed, 0), "()") == 0,  "paren pair inserted");
-    ASSERT(ed.active_pane->cursor_col == 1,               "cursor between the pair");
+    ASSERT(ed.cursor_col == 1,               "cursor between the pair");
     editor_cleanup(&ed);
 }
 
@@ -603,7 +603,7 @@ TEST(test_autoclose_square)
     Editor ed; make_editor(&ed);
     editor_insert_pair(&ed, '[', ']');
     ASSERT(strcmp(line(&ed, 0), "[]") == 0,  "square bracket pair inserted");
-    ASSERT(ed.active_pane->cursor_col == 1,               "cursor between the pair");
+    ASSERT(ed.cursor_col == 1,               "cursor between the pair");
     editor_cleanup(&ed);
 }
 
@@ -612,7 +612,7 @@ TEST(test_autoclose_curly)
     Editor ed; make_editor(&ed);
     editor_insert_pair(&ed, '{', '}');
     ASSERT(strcmp(line(&ed, 0), "{}") == 0,  "curly brace pair inserted");
-    ASSERT(ed.active_pane->cursor_col == 1,               "cursor between the pair");
+    ASSERT(ed.cursor_col == 1,               "cursor between the pair");
     editor_cleanup(&ed);
 }
 
@@ -621,7 +621,7 @@ TEST(test_autoclose_double_quote)
     Editor ed; make_editor(&ed);
     editor_insert_pair(&ed, '"', '"');
     ASSERT(strcmp(line(&ed, 0), "\"\"") == 0, "double-quote pair inserted");
-    ASSERT(ed.active_pane->cursor_col == 1,                "cursor between the pair");
+    ASSERT(ed.cursor_col == 1,                "cursor between the pair");
     editor_cleanup(&ed);
 }
 
@@ -630,7 +630,7 @@ TEST(test_autoclose_single_quote)
     Editor ed; make_editor(&ed);
     editor_insert_pair(&ed, '\'', '\'');
     ASSERT(strcmp(line(&ed, 0), "''") == 0,  "single-quote pair inserted");
-    ASSERT(ed.active_pane->cursor_col == 1,               "cursor between the pair");
+    ASSERT(ed.cursor_col == 1,               "cursor between the pair");
     editor_cleanup(&ed);
 }
 
@@ -644,7 +644,7 @@ TEST(test_autoclose_undo_removes_both)
     editor_insert_pair(&ed, '(', ')');
     editor_undo(&ed);
     ASSERT(line_len(&ed, 0) == 0,  "undo removes both auto-close chars");
-    ASSERT(ed.active_pane->cursor_col == 0,     "cursor back at col 0 after undo");
+    ASSERT(ed.cursor_col == 0,     "cursor back at col 0 after undo");
     editor_cleanup(&ed);
 }
 
@@ -657,10 +657,10 @@ TEST(test_autoclose_cursor_mid_line)
     Editor ed; make_editor(&ed);
     editor_insert_char(&ed, 'a');
     editor_insert_char(&ed, 'b');
-    ed.active_pane->cursor_col = 1;   /* position between 'a' and 'b' */
+    ed.cursor_col = 1;   /* position between 'a' and 'b' */
     editor_insert_pair(&ed, '(', ')');
     ASSERT(strcmp(line(&ed, 0), "a()b") == 0,  "pair inserted mid-line");
-    ASSERT(ed.active_pane->cursor_col == 2,                  "cursor between the pair");
+    ASSERT(ed.cursor_col == 2,                  "cursor between the pair");
     editor_cleanup(&ed);
 }
 
@@ -676,14 +676,14 @@ TEST(test_mark_region_from_selection)
      */
     Editor ed; make_editor(&ed);
     editor_insert_newline(&ed);   /* now 2 lines */
-    ed.active_pane->cursor_row      = 1;
-    ed.active_pane->sel_active      = 1;
-    ed.active_pane->sel_anchor_row  = 0;
-    ed.active_pane->sel_anchor_col  = 0;
+    ed.cursor_row      = 1;
+    ed.sel_active      = 1;
+    ed.sel_anchor_row  = 0;
+    ed.sel_anchor_col  = 0;
     editor_mark_region(&ed);
-    ASSERT(ed.active_pane->region_active    == 1, "region_active set after marking");
-    ASSERT(ed.active_pane->region_start_row == 0, "region_start_row = 0");
-    ASSERT(ed.active_pane->region_end_row   == 1, "region_end_row = 1");
+    ASSERT(ed.region_active    == 1, "region_active set after marking");
+    ASSERT(ed.region_start_row == 0, "region_start_row = 0");
+    ASSERT(ed.region_end_row   == 1, "region_end_row = 1");
     editor_cleanup(&ed);
 }
 
@@ -692,12 +692,12 @@ TEST(test_mark_region_clears_selection)
     /* Selection should be cleared after Ctrl+U marks the region. */
     Editor ed; make_editor(&ed);
     editor_insert_newline(&ed);
-    ed.active_pane->cursor_row      = 1;
-    ed.active_pane->sel_active      = 1;
-    ed.active_pane->sel_anchor_row  = 0;
-    ed.active_pane->sel_anchor_col  = 0;
+    ed.cursor_row      = 1;
+    ed.sel_active      = 1;
+    ed.sel_anchor_row  = 0;
+    ed.sel_anchor_col  = 0;
     editor_mark_region(&ed);
-    ASSERT(ed.active_pane->sel_active == 0, "selection cleared after marking region");
+    ASSERT(ed.sel_active == 0, "selection cleared after marking region");
     editor_cleanup(&ed);
 }
 
@@ -710,13 +710,13 @@ TEST(test_mark_region_reversed_anchor)
     Editor ed; make_editor(&ed);
     editor_insert_newline(&ed);
     editor_insert_newline(&ed);   /* 3 lines: 0, 1, 2 */
-    ed.active_pane->cursor_row      = 0;       /* cursor is on row 0 */
-    ed.active_pane->sel_active      = 1;
-    ed.active_pane->sel_anchor_row  = 2;       /* anchor is on row 2 — below the cursor */
-    ed.active_pane->sel_anchor_col  = 0;
+    ed.cursor_row      = 0;       /* cursor is on row 0 */
+    ed.sel_active      = 1;
+    ed.sel_anchor_row  = 2;       /* anchor is on row 2 — below the cursor */
+    ed.sel_anchor_col  = 0;
     editor_mark_region(&ed);
-    ASSERT(ed.active_pane->region_start_row == 0, "normalised: start is the smaller row");
-    ASSERT(ed.active_pane->region_end_row   == 2, "normalised: end is the larger row");
+    ASSERT(ed.region_start_row == 0, "normalised: start is the smaller row");
+    ASSERT(ed.region_end_row   == 2, "normalised: end is the larger row");
     editor_cleanup(&ed);
 }
 
@@ -727,14 +727,14 @@ TEST(test_mark_region_clear_on_second_call)
      */
     Editor ed; make_editor(&ed);
     editor_insert_newline(&ed);
-    ed.active_pane->cursor_row      = 1;
-    ed.active_pane->sel_active      = 1;
-    ed.active_pane->sel_anchor_row  = 0;
-    ed.active_pane->sel_anchor_col  = 0;
+    ed.cursor_row      = 1;
+    ed.sel_active      = 1;
+    ed.sel_anchor_row  = 0;
+    ed.sel_anchor_col  = 0;
     editor_mark_region(&ed);       /* mark */
-    ASSERT(ed.active_pane->region_active == 1,  "region set after first Ctrl+U");
+    ASSERT(ed.region_active == 1,  "region set after first Ctrl+U");
     editor_mark_region(&ed);       /* clear (no selection this time) */
-    ASSERT(ed.active_pane->region_active == 0,  "region cleared after second Ctrl+U");
+    ASSERT(ed.region_active == 0,  "region cleared after second Ctrl+U");
     editor_cleanup(&ed);
 }
 
@@ -745,7 +745,7 @@ TEST(test_mark_region_no_selection_no_region)
      */
     Editor ed; make_editor(&ed);
     editor_mark_region(&ed);
-    ASSERT(ed.active_pane->region_active == 0, "region stays inactive with no selection");
+    ASSERT(ed.region_active == 0, "region stays inactive with no selection");
     editor_cleanup(&ed);
 }
 
@@ -770,17 +770,17 @@ TEST(test_select_down_from_middle_of_line)
         editor_insert_char(&ed, text2[i]);
 
     /* Place cursor on 'c' (row 0, col 2) */
-    ed.active_pane->cursor_row  = 0;
-    ed.active_pane->cursor_col  = 2;
-    ed.active_pane->desired_col = 2;
+    ed.cursor_row  = 0;
+    ed.cursor_col  = 2;
+    ed.desired_col = 2;
 
     editor_select_down(&ed);
 
-    ASSERT(ed.active_pane->sel_active,              "selection is active");
-    ASSERT(ed.active_pane->sel_anchor_row == 0,     "anchor row is 0");
-    ASSERT(ed.active_pane->sel_anchor_col == 2,     "anchor col is 2 (on 'c')");
-    ASSERT(ed.active_pane->cursor_row == 1,         "cursor moved to row 1");
-    ASSERT(ed.active_pane->cursor_col == 2,         "cursor at col 2 (on 'n')");
+    ASSERT(ed.sel_active,              "selection is active");
+    ASSERT(ed.sel_anchor_row == 0,     "anchor row is 0");
+    ASSERT(ed.sel_anchor_col == 2,     "anchor col is 2 (on 'c')");
+    ASSERT(ed.cursor_row == 1,         "cursor moved to row 1");
+    ASSERT(ed.cursor_col == 2,         "cursor at col 2 (on 'n')");
     editor_cleanup(&ed);
 }
 
@@ -800,17 +800,17 @@ TEST(test_select_down_from_start_of_line)
         editor_insert_char(&ed, text2[i]);
 
     /* Place cursor at start of line 0 */
-    ed.active_pane->cursor_row  = 0;
-    ed.active_pane->cursor_col  = 0;
-    ed.active_pane->desired_col = 0;
+    ed.cursor_row  = 0;
+    ed.cursor_col  = 0;
+    ed.desired_col = 0;
 
     editor_select_down(&ed);
 
-    ASSERT(ed.active_pane->sel_active,              "selection is active");
-    ASSERT(ed.active_pane->sel_anchor_row == 0,     "anchor row is 0");
-    ASSERT(ed.active_pane->sel_anchor_col == 0,     "anchor col is 0 (on 'a')");
-    ASSERT(ed.active_pane->cursor_row == 1,         "cursor moved to row 1");
-    ASSERT(ed.active_pane->cursor_col == 0,         "cursor at col 0 (start of next line)");
+    ASSERT(ed.sel_active,              "selection is active");
+    ASSERT(ed.sel_anchor_row == 0,     "anchor row is 0");
+    ASSERT(ed.sel_anchor_col == 0,     "anchor col is 0 (on 'a')");
+    ASSERT(ed.cursor_row == 1,         "cursor moved to row 1");
+    ASSERT(ed.cursor_col == 0,         "cursor at col 0 (start of next line)");
     editor_cleanup(&ed);
 }
 
@@ -829,17 +829,17 @@ TEST(test_select_up_from_second_line)
         editor_insert_char(&ed, text2[i]);
 
     /* Place cursor on row 1, col 2 */
-    ed.active_pane->cursor_row  = 1;
-    ed.active_pane->cursor_col  = 2;
-    ed.active_pane->desired_col = 2;
+    ed.cursor_row  = 1;
+    ed.cursor_col  = 2;
+    ed.desired_col = 2;
 
     editor_select_up(&ed);
 
-    ASSERT(ed.active_pane->sel_active,              "selection is active");
-    ASSERT(ed.active_pane->sel_anchor_row == 1,     "anchor row is 1");
-    ASSERT(ed.active_pane->sel_anchor_col == 2,     "anchor col is 2");
-    ASSERT(ed.active_pane->cursor_row == 0,         "cursor moved to row 0");
-    ASSERT(ed.active_pane->cursor_col == 2,         "cursor at col 2");
+    ASSERT(ed.sel_active,              "selection is active");
+    ASSERT(ed.sel_anchor_row == 1,     "anchor row is 1");
+    ASSERT(ed.sel_anchor_col == 2,     "anchor col is 2");
+    ASSERT(ed.cursor_row == 0,         "cursor moved to row 0");
+    ASSERT(ed.cursor_col == 2,         "cursor at col 2");
     editor_cleanup(&ed);
 }
 
@@ -856,17 +856,17 @@ TEST(test_select_down_extends_existing_selection)
     editor_insert_newline(&ed);
     editor_insert_char(&ed, 'c');
 
-    ed.active_pane->cursor_row  = 0;
-    ed.active_pane->cursor_col  = 0;
-    ed.active_pane->desired_col = 0;
+    ed.cursor_row  = 0;
+    ed.cursor_col  = 0;
+    ed.desired_col = 0;
 
     editor_select_down(&ed);   /* anchor (0,0) → cursor (1,0) */
     editor_select_down(&ed);   /* anchor stays, cursor (2,0) */
 
-    ASSERT(ed.active_pane->sel_active,              "selection still active");
-    ASSERT(ed.active_pane->sel_anchor_row == 0,     "anchor stays at row 0");
-    ASSERT(ed.active_pane->sel_anchor_col == 0,     "anchor stays at col 0");
-    ASSERT(ed.active_pane->cursor_row == 2,         "cursor on row 2 after two Shift+Downs");
+    ASSERT(ed.sel_active,              "selection still active");
+    ASSERT(ed.sel_anchor_row == 0,     "anchor stays at row 0");
+    ASSERT(ed.sel_anchor_col == 0,     "anchor stays at col 0");
+    ASSERT(ed.cursor_row == 2,         "cursor on row 2 after two Shift+Downs");
     editor_cleanup(&ed);
 }
 
@@ -878,15 +878,15 @@ TEST(test_select_up_at_top_does_nothing)
      */
     Editor ed; make_editor(&ed);
     editor_insert_char(&ed, 'x');
-    ed.active_pane->cursor_row  = 0;
-    ed.active_pane->cursor_col  = 0;
-    ed.active_pane->desired_col = 0;
+    ed.cursor_row  = 0;
+    ed.cursor_col  = 0;
+    ed.desired_col = 0;
 
     editor_select_up(&ed);
 
-    ASSERT(ed.active_pane->sel_active,              "selection is activated");
-    ASSERT(ed.active_pane->sel_anchor_row == 0,     "anchor at row 0");
-    ASSERT(ed.active_pane->cursor_row == 0,         "cursor stays at row 0");
+    ASSERT(ed.sel_active,              "selection is activated");
+    ASSERT(ed.sel_anchor_row == 0,     "anchor at row 0");
+    ASSERT(ed.cursor_row == 0,         "cursor stays at row 0");
     editor_cleanup(&ed);
 }
 
@@ -898,15 +898,15 @@ TEST(test_select_down_at_bottom_does_nothing)
      */
     Editor ed; make_editor(&ed);
     editor_insert_char(&ed, 'x');
-    ed.active_pane->cursor_row  = 0;
-    ed.active_pane->cursor_col  = 0;
-    ed.active_pane->desired_col = 0;
+    ed.cursor_row  = 0;
+    ed.cursor_col  = 0;
+    ed.desired_col = 0;
 
     editor_select_down(&ed);
 
-    ASSERT(ed.active_pane->sel_active,              "selection is activated");
-    ASSERT(ed.active_pane->sel_anchor_row == 0,     "anchor at row 0");
-    ASSERT(ed.active_pane->cursor_row == 0,         "cursor stays at row 0 (no line below)");
+    ASSERT(ed.sel_active,              "selection is activated");
+    ASSERT(ed.sel_anchor_row == 0,     "anchor at row 0");
+    ASSERT(ed.cursor_row == 0,         "cursor stays at row 0 (no line below)");
     editor_cleanup(&ed);
 }
 

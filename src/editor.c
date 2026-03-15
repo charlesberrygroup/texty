@@ -43,8 +43,8 @@ static int clamp(int value, int lo, int hi)
 static void selection_bounds(const Editor *ed,
                               int *sr, int *sc, int *er, int *ec)
 {
-    int ar = ed->active_pane->sel_anchor_row, ac = ed->active_pane->sel_anchor_col;
-    int cr = ed->active_pane->cursor_row,     cc = ed->active_pane->cursor_col;
+    int ar = ed->sel_anchor_row, ac = ed->sel_anchor_col;
+    int cr = ed->cursor_row,     cc = ed->cursor_col;
 
     if (ar < cr || (ar == cr && ac <= cc)) {
         *sr = ar; *sc = ac;
@@ -65,7 +65,7 @@ static void selection_bounds(const Editor *ed,
 static char *selection_get_text(const Editor *ed)
 {
     Buffer *buf = editor_current_buffer((Editor *)ed);
-    if (!buf || !ed->active_pane->sel_active) return NULL;
+    if (!buf || !ed->sel_active) return NULL;
 
     int sr, sc, er, ec;
     selection_bounds(ed, &sr, &sc, &er, &ec);
@@ -188,18 +188,13 @@ static int editor_cols(const Editor *ed)
 void editor_init(Editor *ed)
 {
     memset(ed, 0, sizeof(Editor));
-
     /*
-     * Create the initial pane and wrap it in a leaf node.
-     * The pane tree starts as a single leaf — no splits yet.
-     * pane_create() sets search_match_row/col to -1 for us.
+     * -1 means "no match found yet".  memset sets them to 0, so we
+     * override here to avoid treating row 0 as a valid match on startup.
      */
-    Pane *p = pane_create();
-    ed->pane_root   = pane_node_create_leaf(p);
-    ed->active_pane = p;
-    ed->num_panes   = 1;
-
-    ed->tab_width   = 4;   /* default: 4 spaces per Tab */
+    ed->search_match_row = -1;
+    ed->search_match_col = -1;
+    ed->tab_width        = 4;   /* default: 4 spaces per Tab */
     /* editor_new_buffer will be called by the caller (main.c) */
 }
 
@@ -211,7 +206,8 @@ void editor_cleanup(Editor *ed)
             ed->buffers[i] = NULL;
         }
     }
-    ed->num_buffers = 0;
+    ed->num_buffers    = 0;
+    ed->current_buffer = 0;
 
     /* Free the internal clipboard if one exists */
     free(ed->clipboard);
@@ -226,16 +222,6 @@ void editor_cleanup(Editor *ed)
         filetree_free(ed->filetree);
         ed->filetree = NULL;
     }
-
-    /*
-     * Free the pane tree.  pane_node_destroy() recursively frees all nodes
-     * and their Pane structs.  active_pane becomes a dangling pointer after
-     * this, so NULL it out.
-     */
-    pane_node_destroy(ed->pane_root);
-    ed->pane_root   = NULL;
-    ed->active_pane = NULL;
-    ed->num_panes   = 0;
 }
 
 /* ============================================================================
@@ -251,12 +237,12 @@ void editor_cleanup(Editor *ed)
 static void save_cursor_to_buffer(Editor *ed)
 {
     if (ed->num_buffers == 0) return;
-    Buffer *buf      = ed->buffers[ed->active_pane->buffer_index];
-    buf->cursor_row  = ed->active_pane->cursor_row;
-    buf->cursor_col  = ed->active_pane->cursor_col;
-    buf->desired_col = ed->active_pane->desired_col;
-    buf->view_row    = ed->active_pane->view_row;
-    buf->view_col    = ed->active_pane->view_col;
+    Buffer *buf      = ed->buffers[ed->current_buffer];
+    buf->cursor_row  = ed->cursor_row;
+    buf->cursor_col  = ed->cursor_col;
+    buf->desired_col = ed->desired_col;
+    buf->view_row    = ed->view_row;
+    buf->view_col    = ed->view_col;
 }
 
 /*
@@ -269,12 +255,12 @@ static void save_cursor_to_buffer(Editor *ed)
 static void restore_cursor_from_buffer(Editor *ed)
 {
     if (ed->num_buffers == 0) return;
-    Buffer *buf      = ed->buffers[ed->active_pane->buffer_index];
-    ed->active_pane->cursor_row   = buf->cursor_row;
-    ed->active_pane->cursor_col   = buf->cursor_col;
-    ed->active_pane->desired_col  = buf->desired_col;
-    ed->active_pane->view_row     = buf->view_row;
-    ed->active_pane->view_col     = buf->view_col;
+    Buffer *buf      = ed->buffers[ed->current_buffer];
+    ed->cursor_row   = buf->cursor_row;
+    ed->cursor_col   = buf->cursor_col;
+    ed->desired_col  = buf->desired_col;
+    ed->view_row     = buf->view_row;
+    ed->view_col     = buf->view_col;
 }
 
 /* ============================================================================
@@ -302,7 +288,7 @@ int editor_new_buffer(Editor *ed)
     int idx = ed->num_buffers;
     ed->buffers[idx] = buf;
     ed->num_buffers++;
-    ed->active_pane->buffer_index = idx;
+    ed->current_buffer = idx;
 
     /* New buffer always starts at the top-left — restore from the fresh buffer */
     restore_cursor_from_buffer(ed);
@@ -337,7 +323,7 @@ int editor_open_file(Editor *ed, const char *path)
     int idx = ed->num_buffers;
     ed->buffers[idx] = buf;
     ed->num_buffers++;
-    ed->active_pane->buffer_index = idx;
+    ed->current_buffer = idx;
 
     /* New buffer starts at the top-left */
     restore_cursor_from_buffer(ed);
@@ -358,7 +344,7 @@ int editor_open_or_switch(Editor *ed, const char *path)
         if (buf && buf->filename && strcmp(buf->filename, path) == 0) {
             /* File is already open — switch to it */
             save_cursor_to_buffer(ed);
-            ed->active_pane->buffer_index = i;
+            ed->current_buffer = i;
             restore_cursor_from_buffer(ed);
             editor_selection_clear(ed);
             editor_set_status(ed, "Switched to existing buffer");
@@ -392,7 +378,7 @@ int editor_save(Editor *ed)
 Buffer *editor_current_buffer(Editor *ed)
 {
     if (ed->num_buffers == 0) return NULL;
-    return ed->buffers[ed->active_pane->buffer_index];
+    return ed->buffers[ed->current_buffer];
 }
 
 void editor_next_buffer(Editor *ed)
@@ -403,7 +389,7 @@ void editor_next_buffer(Editor *ed)
     editor_selection_clear(ed);
 
     /* Advance to the next buffer, wrapping from last back to first */
-    ed->active_pane->buffer_index = (ed->active_pane->buffer_index + 1) % ed->num_buffers;
+    ed->current_buffer = (ed->current_buffer + 1) % ed->num_buffers;
 
     restore_cursor_from_buffer(ed);
 }
@@ -416,7 +402,7 @@ void editor_prev_buffer(Editor *ed)
     editor_selection_clear(ed);
 
     /* Move to the previous buffer, wrapping from first to last */
-    ed->active_pane->buffer_index = (ed->active_pane->buffer_index - 1 + ed->num_buffers)
+    ed->current_buffer = (ed->current_buffer - 1 + ed->num_buffers)
                          % ed->num_buffers;
 
     restore_cursor_from_buffer(ed);
@@ -442,7 +428,7 @@ void editor_close_buffer(Editor *ed)
         warn_pending = 0;
     }
 
-    int idx = ed->active_pane->buffer_index;
+    int idx = ed->current_buffer;
 
     /* Free the buffer and its undo/redo text pointers */
     buffer_destroy(ed->buffers[idx]);
@@ -467,8 +453,8 @@ void editor_close_buffer(Editor *ed)
     }
 
     /* Clamp current_buffer so it points to a valid buffer */
-    if (ed->active_pane->buffer_index >= ed->num_buffers)
-        ed->active_pane->buffer_index = ed->num_buffers - 1;
+    if (ed->current_buffer >= ed->num_buffers)
+        ed->current_buffer = ed->num_buffers - 1;
 
     restore_cursor_from_buffer(ed);
     editor_selection_clear(ed);
@@ -481,12 +467,12 @@ void editor_close_buffer(Editor *ed)
 void editor_move_up(Editor *ed)
 {
     Buffer *buf = editor_current_buffer(ed);
-    if (!buf || ed->active_pane->cursor_row == 0) return;
+    if (!buf || ed->cursor_row == 0) return;
 
-    ed->active_pane->cursor_row--;
+    ed->cursor_row--;
     /* Clamp cursor_col to the new line's length, but remember desired_col */
-    int line_len = buffer_line_len(buf, ed->active_pane->cursor_row);
-    ed->active_pane->cursor_col = clamp(ed->active_pane->desired_col, 0, line_len);
+    int line_len = buffer_line_len(buf, ed->cursor_row);
+    ed->cursor_col = clamp(ed->desired_col, 0, line_len);
 
     editor_scroll(ed);
 }
@@ -494,11 +480,11 @@ void editor_move_up(Editor *ed)
 void editor_move_down(Editor *ed)
 {
     Buffer *buf = editor_current_buffer(ed);
-    if (!buf || ed->active_pane->cursor_row >= buf->num_lines - 1) return;
+    if (!buf || ed->cursor_row >= buf->num_lines - 1) return;
 
-    ed->active_pane->cursor_row++;
-    int line_len = buffer_line_len(buf, ed->active_pane->cursor_row);
-    ed->active_pane->cursor_col = clamp(ed->active_pane->desired_col, 0, line_len);
+    ed->cursor_row++;
+    int line_len = buffer_line_len(buf, ed->cursor_row);
+    ed->cursor_col = clamp(ed->desired_col, 0, line_len);
 
     editor_scroll(ed);
 }
@@ -508,15 +494,15 @@ void editor_move_left(Editor *ed)
     Buffer *buf = editor_current_buffer(ed);
     if (!buf) return;
 
-    if (ed->active_pane->cursor_col > 0) {
-        ed->active_pane->cursor_col--;
-    } else if (ed->active_pane->cursor_row > 0) {
+    if (ed->cursor_col > 0) {
+        ed->cursor_col--;
+    } else if (ed->cursor_row > 0) {
         /* Wrap to end of the previous line */
-        ed->active_pane->cursor_row--;
-        ed->active_pane->cursor_col = buffer_line_len(buf, ed->active_pane->cursor_row);
+        ed->cursor_row--;
+        ed->cursor_col = buffer_line_len(buf, ed->cursor_row);
     }
 
-    ed->active_pane->desired_col = ed->active_pane->cursor_col;
+    ed->desired_col = ed->cursor_col;
     editor_scroll(ed);
 }
 
@@ -525,24 +511,24 @@ void editor_move_right(Editor *ed)
     Buffer *buf = editor_current_buffer(ed);
     if (!buf) return;
 
-    int line_len = buffer_line_len(buf, ed->active_pane->cursor_row);
+    int line_len = buffer_line_len(buf, ed->cursor_row);
 
-    if (ed->active_pane->cursor_col < line_len) {
-        ed->active_pane->cursor_col++;
-    } else if (ed->active_pane->cursor_row < buf->num_lines - 1) {
+    if (ed->cursor_col < line_len) {
+        ed->cursor_col++;
+    } else if (ed->cursor_row < buf->num_lines - 1) {
         /* Wrap to start of the next line */
-        ed->active_pane->cursor_row++;
-        ed->active_pane->cursor_col = 0;
+        ed->cursor_row++;
+        ed->cursor_col = 0;
     }
 
-    ed->active_pane->desired_col = ed->active_pane->cursor_col;
+    ed->desired_col = ed->cursor_col;
     editor_scroll(ed);
 }
 
 void editor_move_line_start(Editor *ed)
 {
-    ed->active_pane->cursor_col  = 0;
-    ed->active_pane->desired_col = 0;
+    ed->cursor_col  = 0;
+    ed->desired_col = 0;
     editor_scroll(ed);
 }
 
@@ -551,9 +537,9 @@ void editor_move_line_end(Editor *ed)
     Buffer *buf = editor_current_buffer(ed);
     if (!buf) return;
 
-    int line_len    = buffer_line_len(buf, ed->active_pane->cursor_row);
-    ed->active_pane->cursor_col  = line_len;
-    ed->active_pane->desired_col = line_len;
+    int line_len    = buffer_line_len(buf, ed->cursor_row);
+    ed->cursor_col  = line_len;
+    ed->desired_col = line_len;
     editor_scroll(ed);
 }
 
@@ -565,15 +551,15 @@ void editor_page_up(Editor *ed)
     int rows = editor_rows(ed);
 
     /* Move the cursor up by one screenful */
-    ed->active_pane->cursor_row -= rows;
-    if (ed->active_pane->cursor_row < 0) ed->active_pane->cursor_row = 0;
+    ed->cursor_row -= rows;
+    if (ed->cursor_row < 0) ed->cursor_row = 0;
 
     /* Also scroll the viewport */
-    ed->active_pane->view_row -= rows;
-    if (ed->active_pane->view_row < 0) ed->active_pane->view_row = 0;
+    ed->view_row -= rows;
+    if (ed->view_row < 0) ed->view_row = 0;
 
-    int line_len   = buffer_line_len(buf, ed->active_pane->cursor_row);
-    ed->active_pane->cursor_col = clamp(ed->active_pane->desired_col, 0, line_len);
+    int line_len   = buffer_line_len(buf, ed->cursor_row);
+    ed->cursor_col = clamp(ed->desired_col, 0, line_len);
 
     editor_scroll(ed);
 }
@@ -586,23 +572,23 @@ void editor_page_down(Editor *ed)
     int rows       = editor_rows(ed);
     int last_line  = buf->num_lines - 1;
 
-    ed->active_pane->cursor_row += rows;
-    if (ed->active_pane->cursor_row > last_line) ed->active_pane->cursor_row = last_line;
+    ed->cursor_row += rows;
+    if (ed->cursor_row > last_line) ed->cursor_row = last_line;
 
-    ed->active_pane->view_row += rows;
+    ed->view_row += rows;
     /* editor_scroll will clamp view_row correctly */
 
-    int line_len   = buffer_line_len(buf, ed->active_pane->cursor_row);
-    ed->active_pane->cursor_col = clamp(ed->active_pane->desired_col, 0, line_len);
+    int line_len   = buffer_line_len(buf, ed->cursor_row);
+    ed->cursor_col = clamp(ed->desired_col, 0, line_len);
 
     editor_scroll(ed);
 }
 
 void editor_move_file_start(Editor *ed)
 {
-    ed->active_pane->cursor_row  = 0;
-    ed->active_pane->cursor_col  = 0;
-    ed->active_pane->desired_col = 0;
+    ed->cursor_row  = 0;
+    ed->cursor_col  = 0;
+    ed->desired_col = 0;
     editor_scroll(ed);
 }
 
@@ -611,10 +597,10 @@ void editor_move_file_end(Editor *ed)
     Buffer *buf = editor_current_buffer(ed);
     if (!buf) return;
 
-    ed->active_pane->cursor_row  = buf->num_lines - 1;
-    int line_len    = buffer_line_len(buf, ed->active_pane->cursor_row);
-    ed->active_pane->cursor_col  = line_len;
-    ed->active_pane->desired_col = line_len;
+    ed->cursor_row  = buf->num_lines - 1;
+    int line_len    = buffer_line_len(buf, ed->cursor_row);
+    ed->cursor_col  = line_len;
+    ed->desired_col = line_len;
     editor_scroll(ed);
 }
 
@@ -631,7 +617,7 @@ void editor_insert_char(Editor *ed, char c)
      * If text is selected, delete it first (standard "replace selection"
      * behavior: typing replaces the selected region).
      */
-    if (ed->active_pane->sel_active) {
+    if (ed->sel_active) {
         int sr, sc, er, ec;
         selection_bounds(ed, &sr, &sc, &er, &ec);
         char *text = selection_get_text(ed);
@@ -643,14 +629,14 @@ void editor_insert_char(Editor *ed, char c)
             rec.end_row           = er; rec.end_col = ec;
             rec.c                 = 0;
             rec.text              = text;
-            rec.cursor_row_before = ed->active_pane->cursor_row;
-            rec.cursor_col_before = ed->active_pane->cursor_col;
+            rec.cursor_row_before = ed->cursor_row;
+            rec.cursor_col_before = ed->cursor_col;
             rec.cursor_row_after  = sr;
             rec.cursor_col_after  = sc;
             undo_push(&buf->undo_stack, rec);
             undo_clear(&buf->redo_stack);
             buffer_delete_region(buf, sr, sc, er, ec);
-            ed->active_pane->cursor_row = sr; ed->active_pane->cursor_col = sc;
+            ed->cursor_row = sr; ed->cursor_col = sc;
         }
         editor_selection_clear(ed);
     }
@@ -663,22 +649,22 @@ void editor_insert_char(Editor *ed, char c)
     UndoRecord rec;
     memset(&rec, 0, sizeof(rec));
     rec.type              = UNDO_INSERT_CHAR;
-    rec.row               = ed->active_pane->cursor_row;
-    rec.col               = ed->active_pane->cursor_col;
+    rec.row               = ed->cursor_row;
+    rec.col               = ed->cursor_col;
     rec.c                 = c;
-    rec.cursor_row_before = ed->active_pane->cursor_row;
-    rec.cursor_col_before = ed->active_pane->cursor_col;
-    rec.cursor_row_after  = ed->active_pane->cursor_row;
-    rec.cursor_col_after  = ed->active_pane->cursor_col + 1;
+    rec.cursor_row_before = ed->cursor_row;
+    rec.cursor_col_before = ed->cursor_col;
+    rec.cursor_row_after  = ed->cursor_row;
+    rec.cursor_col_after  = ed->cursor_col + 1;
     undo_push(&buf->undo_stack, rec);
 
     /* Any new edit invalidates the redo history */
     undo_clear(&buf->redo_stack);
 
-    buffer_insert_char(buf, ed->active_pane->cursor_row, ed->active_pane->cursor_col, c);
+    buffer_insert_char(buf, ed->cursor_row, ed->cursor_col, c);
 
-    ed->active_pane->cursor_col++;
-    ed->active_pane->desired_col = ed->active_pane->cursor_col;
+    ed->cursor_col++;
+    ed->desired_col = ed->cursor_col;
     editor_scroll(ed);
 }
 
@@ -691,7 +677,7 @@ void editor_insert_pair(Editor *ed, char open, char close)
      * If text is selected, delete the selection first (same behaviour as
      * editor_insert_char: typing replaces the selection).
      */
-    if (ed->active_pane->sel_active) {
+    if (ed->sel_active) {
         int sr, sc, er, ec;
         selection_bounds(ed, &sr, &sc, &er, &ec);
         char *text = selection_get_text(ed);
@@ -703,14 +689,14 @@ void editor_insert_pair(Editor *ed, char open, char close)
             rec.end_row           = er; rec.end_col = ec;
             rec.c                 = 0;
             rec.text              = text;
-            rec.cursor_row_before = ed->active_pane->cursor_row;
-            rec.cursor_col_before = ed->active_pane->cursor_col;
+            rec.cursor_row_before = ed->cursor_row;
+            rec.cursor_col_before = ed->cursor_col;
             rec.cursor_row_after  = sr;
             rec.cursor_col_after  = sc;
             undo_push(&buf->undo_stack, rec);
             undo_clear(&buf->redo_stack);
             buffer_delete_region(buf, sr, sc, er, ec);
-            ed->active_pane->cursor_row = sr; ed->active_pane->cursor_col = sc;
+            ed->cursor_row = sr; ed->cursor_col = sc;
         }
         editor_selection_clear(ed);
     }
@@ -720,8 +706,8 @@ void editor_insert_pair(Editor *ed, char open, char close)
      * insert_text_at handles inserting the whole thing at once.
      */
     char pair[3] = { open, close, '\0' };
-    int start_row = ed->active_pane->cursor_row;
-    int start_col = ed->active_pane->cursor_col;
+    int start_row = ed->cursor_row;
+    int start_col = ed->cursor_col;
     int end_row, end_col;
 
     insert_text_at(buf, start_row, start_col, pair, &end_row, &end_col);
@@ -750,19 +736,19 @@ void editor_insert_pair(Editor *ed, char open, char close)
     undo_clear(&buf->redo_stack);
 
     /* Place cursor between the opening and closing character */
-    ed->active_pane->cursor_row  = start_row;
-    ed->active_pane->cursor_col  = start_col + 1;
-    ed->active_pane->desired_col = ed->active_pane->cursor_col;
+    ed->cursor_row  = start_row;
+    ed->cursor_col  = start_col + 1;
+    ed->desired_col = ed->cursor_col;
     editor_scroll(ed);
 }
 
 int editor_find_bracket_match(const Editor *ed, int *out_row, int *out_col)
 {
-    const Buffer *buf = ed->buffers[ed->active_pane->buffer_index];
+    const Buffer *buf = ed->buffers[ed->current_buffer];
     if (!buf) return 0;
 
-    int row = ed->active_pane->cursor_row;
-    int col = ed->active_pane->cursor_col;
+    int row = ed->cursor_row;
+    int col = ed->cursor_col;
     int len = buffer_line_len(buf, row);
 
     /* No character under the cursor (cursor is past end of line) */
@@ -881,9 +867,9 @@ void editor_goto_line(Editor *ed)
     if (row >= buf->num_lines)
         row = buf->num_lines - 1;
 
-    ed->active_pane->cursor_row  = row;
-    ed->active_pane->cursor_col  = 0;
-    ed->active_pane->desired_col = 0;
+    ed->cursor_row  = row;
+    ed->cursor_col  = 0;
+    ed->desired_col = 0;
     editor_selection_clear(ed);
     editor_scroll(ed);
     editor_set_status(ed, "Line %d", row + 1);
@@ -897,7 +883,7 @@ void editor_toggle_word_wrap(Editor *ed)
      * scroll horizontally when lines are wrapped.
      */
     if (ed->word_wrap)
-        ed->active_pane->view_col = 0;
+        ed->view_col = 0;
     editor_set_status(ed, "Word wrap %s (F4 to toggle)",
                       ed->word_wrap ? "ON" : "OFF");
     editor_scroll(ed);
@@ -928,8 +914,8 @@ void editor_insert_tab(Editor *ed)
      * Insert the spaces using the same helper as paste.  This lets us record
      * the whole tab as a SINGLE undo entry — one Ctrl+Z removes all spaces.
      */
-    int start_row = ed->active_pane->cursor_row;
-    int start_col = ed->active_pane->cursor_col;
+    int start_row = ed->cursor_row;
+    int start_col = ed->cursor_col;
     int end_row, end_col;
 
     insert_text_at(buf, start_row, start_col, spaces, &end_row, &end_col);
@@ -951,9 +937,9 @@ void editor_insert_tab(Editor *ed)
     undo_clear(&buf->redo_stack);
 
     /* Move cursor to end of inserted spaces */
-    ed->active_pane->cursor_row  = end_row;
-    ed->active_pane->cursor_col  = end_col;
-    ed->active_pane->desired_col = ed->active_pane->cursor_col;
+    ed->cursor_row  = end_row;
+    ed->cursor_col  = end_col;
+    ed->desired_col = ed->cursor_col;
     editor_scroll(ed);
 }
 
@@ -970,7 +956,7 @@ void editor_insert_newline(Editor *ed)
      * buf->lines, because buffer_insert_newline may realloc the lines array,
      * which would invalidate any pointer we held into it.
      */
-    Line *cur_line = &buf->lines[ed->active_pane->cursor_row];
+    Line *cur_line = &buf->lines[ed->cursor_row];
     int indent = 0;
     char indent_buf[256];   /* enough for any reasonable indentation */
     while (indent < cur_line->len &&
@@ -988,22 +974,22 @@ void editor_insert_newline(Editor *ed)
     UndoRecord rec;
     memset(&rec, 0, sizeof(rec));
     rec.type              = UNDO_INSERT_NEWLINE;
-    rec.row               = ed->active_pane->cursor_row;
-    rec.col               = ed->active_pane->cursor_col;
+    rec.row               = ed->cursor_row;
+    rec.col               = ed->cursor_col;
     rec.c                 = 0;               /* not used for newline */
-    rec.cursor_row_before = ed->active_pane->cursor_row;
-    rec.cursor_col_before = ed->active_pane->cursor_col;
-    rec.cursor_row_after  = ed->active_pane->cursor_row + 1;
+    rec.cursor_row_before = ed->cursor_row;
+    rec.cursor_col_before = ed->cursor_col;
+    rec.cursor_row_after  = ed->cursor_row + 1;
     rec.cursor_col_after  = indent;          /* cursor lands after the indent */
     undo_push(&buf->undo_stack, rec);
 
     undo_clear(&buf->redo_stack);
 
-    buffer_insert_newline(buf, ed->active_pane->cursor_row, ed->active_pane->cursor_col);
+    buffer_insert_newline(buf, ed->cursor_row, ed->cursor_col);
 
-    ed->active_pane->cursor_row++;
-    ed->active_pane->cursor_col  = 0;
-    ed->active_pane->desired_col = 0;
+    ed->cursor_row++;
+    ed->cursor_col  = 0;
+    ed->desired_col = 0;
 
     /*
      * Insert the indentation characters into the new (empty) line.
@@ -1016,12 +1002,12 @@ void editor_insert_newline(Editor *ed)
      * including its indentation prefix.
      */
     for (int i = 0; i < indent; i++) {
-        buffer_insert_char(buf, ed->active_pane->cursor_row, ed->active_pane->cursor_col,
+        buffer_insert_char(buf, ed->cursor_row, ed->cursor_col,
                            indent_buf[i]);
-        ed->active_pane->cursor_col++;
+        ed->cursor_col++;
     }
 
-    ed->active_pane->desired_col = ed->active_pane->cursor_col;
+    ed->desired_col = ed->cursor_col;
     editor_scroll(ed);
 }
 
@@ -1031,7 +1017,7 @@ void editor_backspace(Editor *ed)
     if (!buf) return;
 
     /* Delete the selection if one is active (Backspace clears it) */
-    if (ed->active_pane->sel_active) {
+    if (ed->sel_active) {
         editor_cut(ed);
         return;
     }
@@ -1039,7 +1025,7 @@ void editor_backspace(Editor *ed)
     UndoRecord rec;
     memset(&rec, 0, sizeof(rec));
 
-    if (ed->active_pane->cursor_col > 0) {
+    if (ed->cursor_col > 0) {
         /*
          * Delete the character immediately to the LEFT of the cursor.
          * We must read the character BEFORE deleting it — afterwards it's gone.
@@ -1047,24 +1033,24 @@ void editor_backspace(Editor *ed)
          * buffer_get_line returns a pointer to the line's text array.
          * Indexing with [cursor_col - 1] gives us the character to delete.
          */
-        int  del_col = ed->active_pane->cursor_col - 1;
-        char del_c   = buffer_get_line(buf, ed->active_pane->cursor_row)[del_col];
+        int  del_col = ed->cursor_col - 1;
+        char del_c   = buffer_get_line(buf, ed->cursor_row)[del_col];
 
         rec.type              = UNDO_DELETE_CHAR;
-        rec.row               = ed->active_pane->cursor_row;
+        rec.row               = ed->cursor_row;
         rec.col               = del_col;
         rec.c                 = del_c;
-        rec.cursor_row_before = ed->active_pane->cursor_row;
-        rec.cursor_col_before = ed->active_pane->cursor_col;
-        rec.cursor_row_after  = ed->active_pane->cursor_row;
+        rec.cursor_row_before = ed->cursor_row;
+        rec.cursor_col_before = ed->cursor_col;
+        rec.cursor_row_after  = ed->cursor_row;
         rec.cursor_col_after  = del_col;
         undo_push(&buf->undo_stack, rec);
         undo_clear(&buf->redo_stack);
 
-        buffer_delete_char(buf, ed->active_pane->cursor_row, del_col);
-        ed->active_pane->cursor_col--;
+        buffer_delete_char(buf, ed->cursor_row, del_col);
+        ed->cursor_col--;
 
-    } else if (ed->active_pane->cursor_row > 0) {
+    } else if (ed->cursor_row > 0) {
         /*
          * At column 0 — pressing Backspace joins this line with the one above.
          * The join point is the current length of the line above (that's where
@@ -1073,14 +1059,14 @@ void editor_backspace(Editor *ed)
          * To undo a join, we call insert_newline(row-1, col=prev_line_len),
          * which splits line (row-1) at the join point, restoring both lines.
          */
-        int join_row = ed->active_pane->cursor_row - 1;
+        int join_row = ed->cursor_row - 1;
         int join_col = buffer_line_len(buf, join_row); /* length of line above */
 
         rec.type              = UNDO_JOIN_LINES;
         rec.row               = join_row;
         rec.col               = join_col;
         rec.c                 = 0;
-        rec.cursor_row_before = ed->active_pane->cursor_row;
+        rec.cursor_row_before = ed->cursor_row;
         rec.cursor_col_before = 0;
         rec.cursor_row_after  = join_row;
         rec.cursor_col_after  = join_col;
@@ -1088,11 +1074,11 @@ void editor_backspace(Editor *ed)
         undo_clear(&buf->redo_stack);
 
         buffer_join_lines(buf, join_row);
-        ed->active_pane->cursor_row--;
-        ed->active_pane->cursor_col = join_col;
+        ed->cursor_row--;
+        ed->cursor_col = join_col;
     }
 
-    ed->active_pane->desired_col = ed->active_pane->cursor_col;
+    ed->desired_col = ed->cursor_col;
     editor_scroll(ed);
 }
 
@@ -1102,33 +1088,33 @@ void editor_delete_char(Editor *ed)
     if (!buf) return;
 
     /* Delete the selection if one is active (Delete key clears it) */
-    if (ed->active_pane->sel_active) {
+    if (ed->sel_active) {
         editor_cut(ed);
         return;
     }
 
-    int line_len = buffer_line_len(buf, ed->active_pane->cursor_row);
+    int line_len = buffer_line_len(buf, ed->cursor_row);
     UndoRecord rec;
     memset(&rec, 0, sizeof(rec));
 
-    if (ed->active_pane->cursor_col < line_len) {
+    if (ed->cursor_col < line_len) {
         /* Delete the character UNDER the cursor (at cursor_col) */
-        char del_c = buffer_get_line(buf, ed->active_pane->cursor_row)[ed->active_pane->cursor_col];
+        char del_c = buffer_get_line(buf, ed->cursor_row)[ed->cursor_col];
 
         rec.type              = UNDO_DELETE_CHAR;
-        rec.row               = ed->active_pane->cursor_row;
-        rec.col               = ed->active_pane->cursor_col;
+        rec.row               = ed->cursor_row;
+        rec.col               = ed->cursor_col;
         rec.c                 = del_c;
-        rec.cursor_row_before = ed->active_pane->cursor_row;
-        rec.cursor_col_before = ed->active_pane->cursor_col;
-        rec.cursor_row_after  = ed->active_pane->cursor_row;
-        rec.cursor_col_after  = ed->active_pane->cursor_col;  /* cursor stays put */
+        rec.cursor_row_before = ed->cursor_row;
+        rec.cursor_col_before = ed->cursor_col;
+        rec.cursor_row_after  = ed->cursor_row;
+        rec.cursor_col_after  = ed->cursor_col;  /* cursor stays put */
         undo_push(&buf->undo_stack, rec);
         undo_clear(&buf->redo_stack);
 
-        buffer_delete_char(buf, ed->active_pane->cursor_row, ed->active_pane->cursor_col);
+        buffer_delete_char(buf, ed->cursor_row, ed->cursor_col);
 
-    } else if (ed->active_pane->cursor_row < buf->num_lines - 1) {
+    } else if (ed->cursor_row < buf->num_lines - 1) {
         /*
          * At end of line — Delete joins this line with the one below.
          * join_col is the current line length (= the join point).
@@ -1136,21 +1122,21 @@ void editor_delete_char(Editor *ed)
         int join_col = line_len;
 
         rec.type              = UNDO_JOIN_LINES;
-        rec.row               = ed->active_pane->cursor_row;
+        rec.row               = ed->cursor_row;
         rec.col               = join_col;
         rec.c                 = 0;
-        rec.cursor_row_before = ed->active_pane->cursor_row;
-        rec.cursor_col_before = ed->active_pane->cursor_col;
-        rec.cursor_row_after  = ed->active_pane->cursor_row;
-        rec.cursor_col_after  = ed->active_pane->cursor_col;
+        rec.cursor_row_before = ed->cursor_row;
+        rec.cursor_col_before = ed->cursor_col;
+        rec.cursor_row_after  = ed->cursor_row;
+        rec.cursor_col_after  = ed->cursor_col;
         undo_push(&buf->undo_stack, rec);
         undo_clear(&buf->redo_stack);
 
-        buffer_join_lines(buf, ed->active_pane->cursor_row);
+        buffer_join_lines(buf, ed->cursor_row);
     }
     /* If on the last line at end-of-line, nothing to delete */
 
-    ed->active_pane->desired_col = ed->active_pane->cursor_col;
+    ed->desired_col = ed->cursor_col;
     editor_scroll(ed);
 }
 
@@ -1227,11 +1213,11 @@ static int search_backward(Buffer *buf, const char *query, int qlen,
  */
 static void jump_to_match(Editor *ed, int row, int col)
 {
-    ed->active_pane->search_match_row = row;
-    ed->active_pane->search_match_col = col;
-    ed->active_pane->cursor_row       = row;
-    ed->active_pane->cursor_col       = col;
-    ed->active_pane->desired_col      = col;
+    ed->search_match_row = row;
+    ed->search_match_col = col;
+    ed->cursor_row       = row;
+    ed->cursor_col       = col;
+    ed->desired_col      = col;
     editor_scroll(ed);
 }
 
@@ -1242,8 +1228,8 @@ static void jump_to_match(Editor *ed, int row, int col)
 void editor_search_clear(Editor *ed)
 {
     ed->search_query[0]  = '\0';
-    ed->active_pane->search_match_row = -1;
-    ed->active_pane->search_match_col = -1;
+    ed->search_match_row = -1;
+    ed->search_match_col = -1;
 }
 
 void editor_find(Editor *ed)
@@ -1275,7 +1261,7 @@ void editor_find(Editor *ed)
      * editing.  For "find next" we start one column ahead.
      */
     if (search_forward(buf, ed->search_query, qlen,
-                        ed->active_pane->cursor_row, ed->active_pane->cursor_col,
+                        ed->cursor_row, ed->cursor_col,
                         &match_row, &match_col)) {
         jump_to_match(ed, match_row, match_col);
         editor_set_status(ed, "F3: next  Shift+F3: prev  Ctrl+R: replace  Esc: clear");
@@ -1285,8 +1271,8 @@ void editor_find(Editor *ed)
         jump_to_match(ed, match_row, match_col);
         editor_set_status(ed, "Wrapped.  F3: next  Shift+F3: prev  Ctrl+R: replace");
     } else {
-        ed->active_pane->search_match_row = -1;
-        ed->active_pane->search_match_col = -1;
+        ed->search_match_row = -1;
+        ed->search_match_col = -1;
         editor_set_status(ed, "Not found: %s", ed->search_query);
     }
 }
@@ -1303,9 +1289,9 @@ void editor_find_next(Editor *ed)
     }
 
     int qlen      = (int)strlen(ed->search_query);
-    int from_row  = (ed->active_pane->search_match_row >= 0) ? ed->active_pane->search_match_row : ed->active_pane->cursor_row;
-    int from_col  = (ed->active_pane->search_match_col >= 0) ? ed->active_pane->search_match_col + qlen
-                                                 : ed->active_pane->cursor_col + 1;
+    int from_row  = (ed->search_match_row >= 0) ? ed->search_match_row : ed->cursor_row;
+    int from_col  = (ed->search_match_col >= 0) ? ed->search_match_col + qlen
+                                                 : ed->cursor_col + 1;
     int match_row, match_col;
 
     if (search_forward(buf, ed->search_query, qlen,
@@ -1332,9 +1318,9 @@ void editor_find_prev(Editor *ed)
     }
 
     int qlen     = (int)strlen(ed->search_query);
-    int from_row = (ed->active_pane->search_match_row >= 0) ? ed->active_pane->search_match_row : ed->active_pane->cursor_row;
-    int from_col = (ed->active_pane->search_match_col >= 0) ? ed->active_pane->search_match_col
-                                                : ed->active_pane->cursor_col;
+    int from_row = (ed->search_match_row >= 0) ? ed->search_match_row : ed->cursor_row;
+    int from_col = (ed->search_match_col >= 0) ? ed->search_match_col
+                                                : ed->cursor_col;
     int match_row, match_col;
 
     if (search_backward(buf, ed->search_query, qlen,
@@ -1459,11 +1445,11 @@ void editor_replace(Editor *ed)
 
     if (count > 0) {
         /* Update search highlight to show the query on screen */
-        ed->active_pane->search_match_row = -1;
-        ed->active_pane->search_match_col = -1;
-        ed->active_pane->cursor_row  = row;
-        ed->active_pane->cursor_col  = col;
-        ed->active_pane->desired_col = col;
+        ed->search_match_row = -1;
+        ed->search_match_col = -1;
+        ed->cursor_row  = row;
+        ed->cursor_col  = col;
+        ed->desired_col = col;
         editor_scroll(ed);
         editor_set_status(ed, "Replaced %d occurrence%s.",
                           count, count == 1 ? "" : "s");
@@ -1478,7 +1464,7 @@ void editor_replace(Editor *ed)
 
 void editor_selection_clear(Editor *ed)
 {
-    ed->active_pane->sel_active = 0;
+    ed->sel_active = 0;
 }
 
 /*
@@ -1487,10 +1473,10 @@ void editor_selection_clear(Editor *ed)
  */
 static void selection_ensure_anchor(Editor *ed)
 {
-    if (!ed->active_pane->sel_active) {
-        ed->active_pane->sel_anchor_row = ed->active_pane->cursor_row;
-        ed->active_pane->sel_anchor_col = ed->active_pane->cursor_col;
-        ed->active_pane->sel_active     = 1;
+    if (!ed->sel_active) {
+        ed->sel_anchor_row = ed->cursor_row;
+        ed->sel_anchor_col = ed->cursor_col;
+        ed->sel_active     = 1;
     }
 }
 
@@ -1536,14 +1522,14 @@ void editor_select_all(Editor *ed)
     if (!buf) return;
 
     /* Anchor at the very beginning of the file */
-    ed->active_pane->sel_anchor_row = 0;
-    ed->active_pane->sel_anchor_col = 0;
-    ed->active_pane->sel_active     = 1;
+    ed->sel_anchor_row = 0;
+    ed->sel_anchor_col = 0;
+    ed->sel_active     = 1;
 
     /* Cursor at the very end of the file */
-    ed->active_pane->cursor_row  = buf->num_lines - 1;
-    ed->active_pane->cursor_col  = buffer_line_len(buf, ed->active_pane->cursor_row);
-    ed->active_pane->desired_col = ed->active_pane->cursor_col;
+    ed->cursor_row  = buf->num_lines - 1;
+    ed->cursor_col  = buffer_line_len(buf, ed->cursor_row);
+    ed->desired_col = ed->cursor_col;
 
     editor_scroll(ed);
 }
@@ -1554,7 +1540,7 @@ void editor_select_all(Editor *ed)
 
 void editor_copy(Editor *ed)
 {
-    if (!ed->active_pane->sel_active) {
+    if (!ed->sel_active) {
         editor_set_status(ed, "No selection to copy.  Use Shift+Arrow to select.");
         return;
     }
@@ -1578,7 +1564,7 @@ void editor_cut(Editor *ed)
     Buffer *buf = editor_current_buffer(ed);
     if (!buf) return;
 
-    if (!ed->active_pane->sel_active) {
+    if (!ed->sel_active) {
         editor_set_status(ed, "No selection to cut.  Use Shift+Arrow to select.");
         return;
     }
@@ -1613,8 +1599,8 @@ void editor_cut(Editor *ed)
     rec.end_col           = ec;
     rec.c                 = 0;
     rec.text              = strdup(text);   /* undo stack takes ownership */
-    rec.cursor_row_before = ed->active_pane->cursor_row;
-    rec.cursor_col_before = ed->active_pane->cursor_col;
+    rec.cursor_row_before = ed->cursor_row;
+    rec.cursor_col_before = ed->cursor_col;
     rec.cursor_row_after  = sr;
     rec.cursor_col_after  = sc;
 
@@ -1625,9 +1611,9 @@ void editor_cut(Editor *ed)
     buffer_delete_region(buf, sr, sc, er, ec);
 
     /* Move cursor to where the selection started */
-    ed->active_pane->cursor_row  = sr;
-    ed->active_pane->cursor_col  = sc;
-    ed->active_pane->desired_col = sc;
+    ed->cursor_row  = sr;
+    ed->cursor_col  = sc;
+    ed->desired_col = sc;
     editor_selection_clear(ed);
     editor_scroll(ed);
 
@@ -1648,7 +1634,7 @@ void editor_paste(Editor *ed)
      * If a selection is active, delete it first (standard "replace selection"
      * behavior — typing or pasting over a selection removes it).
      */
-    if (ed->active_pane->sel_active) {
+    if (ed->sel_active) {
         editor_cut(ed);  /* this updates clipboard with selected text though */
         /*
          * That just replaced our clipboard.  We need to paste the original
@@ -1664,8 +1650,8 @@ void editor_paste(Editor *ed)
 
     if (!ed->clipboard) return;
 
-    int paste_row = ed->active_pane->cursor_row;
-    int paste_col = ed->active_pane->cursor_col;
+    int paste_row = ed->cursor_row;
+    int paste_col = ed->cursor_col;
 
     /* Insert the clipboard text, tracking where it ends */
     int end_row, end_col;
@@ -1694,9 +1680,9 @@ void editor_paste(Editor *ed)
     undo_clear(&buf->redo_stack);
 
     /* Move cursor to end of pasted text */
-    ed->active_pane->cursor_row  = end_row;
-    ed->active_pane->cursor_col  = end_col;
-    ed->active_pane->desired_col = end_col;
+    ed->cursor_row  = end_row;
+    ed->cursor_col  = end_col;
+    ed->desired_col = end_col;
     editor_scroll(ed);
 }
 
@@ -1777,9 +1763,9 @@ void editor_undo(Editor *ed)
     }
 
     /* Restore cursor to where it was before the original edit */
-    ed->active_pane->cursor_row  = rec.cursor_row_before;
-    ed->active_pane->cursor_col  = rec.cursor_col_before;
-    ed->active_pane->desired_col = ed->active_pane->cursor_col;
+    ed->cursor_row  = rec.cursor_row_before;
+    ed->cursor_col  = rec.cursor_col_before;
+    ed->desired_col = ed->cursor_col;
     editor_selection_clear(ed);
     editor_scroll(ed);
 
@@ -1837,9 +1823,9 @@ void editor_redo(Editor *ed)
     }
 
     /* Restore cursor to where it was after the original edit */
-    ed->active_pane->cursor_row  = rec.cursor_row_after;
-    ed->active_pane->cursor_col  = rec.cursor_col_after;
-    ed->active_pane->desired_col = ed->active_pane->cursor_col;
+    ed->cursor_row  = rec.cursor_row_after;
+    ed->cursor_col  = rec.cursor_col_after;
+    ed->desired_col = ed->cursor_col;
     editor_selection_clear(ed);
     editor_scroll(ed);
 
@@ -1853,7 +1839,7 @@ void editor_redo(Editor *ed)
 
 void editor_mark_region(Editor *ed)
 {
-    if (ed->active_pane->sel_active) {
+    if (ed->sel_active) {
         /*
          * Capture the selection's row range as the region.
          *
@@ -1862,17 +1848,17 @@ void editor_mark_region(Editor *ed)
          * We normalise so that region_start_row is always the earlier row.
          */
         int sr, er;
-        if (ed->active_pane->sel_anchor_row <= ed->active_pane->cursor_row) {
-            sr = ed->active_pane->sel_anchor_row;
-            er = ed->active_pane->cursor_row;
+        if (ed->sel_anchor_row <= ed->cursor_row) {
+            sr = ed->sel_anchor_row;
+            er = ed->cursor_row;
         } else {
-            sr = ed->active_pane->cursor_row;
-            er = ed->active_pane->sel_anchor_row;
+            sr = ed->cursor_row;
+            er = ed->sel_anchor_row;
         }
 
-        ed->active_pane->region_active    = 1;
-        ed->active_pane->region_start_row = sr;
-        ed->active_pane->region_end_row   = er;
+        ed->region_active    = 1;
+        ed->region_start_row = sr;
+        ed->region_end_row   = er;
 
         /*
          * Clear the selection so it does not compete visually with the
@@ -1883,9 +1869,9 @@ void editor_mark_region(Editor *ed)
         editor_set_status(ed, "Region marked: lines %d-%d  (Ctrl+U to clear)",
                           sr + 1, er + 1);
 
-    } else if (ed->active_pane->region_active) {
+    } else if (ed->region_active) {
         /* Second Ctrl+U with no selection: clear the region. */
-        ed->active_pane->region_active = 0;
+        ed->region_active = 0;
         editor_set_status(ed, "Region cleared.");
 
     } else {
@@ -1942,11 +1928,11 @@ void editor_scroll(Editor *ed)
          *      visible row, advance view_row one buffer line at a time until
          *      the cursor fits.
          */
-        ed->active_pane->view_col = 0;
+        ed->view_col = 0;
 
         /* Step 1 — cursor above viewport */
-        if (ed->active_pane->cursor_row < ed->active_pane->view_row)
-            ed->active_pane->view_row = ed->active_pane->cursor_row;
+        if (ed->cursor_row < ed->view_row)
+            ed->view_row = ed->cursor_row;
 
         /* Step 2 — cursor below viewport: scroll down until cursor is visible */
         for (;;) {
@@ -1955,11 +1941,11 @@ void editor_scroll(Editor *ed)
              * wrapped sub-row within cursor_row.
              */
             int screen_used = 0;
-            for (int r = ed->active_pane->view_row; r <= ed->active_pane->cursor_row; r++) {
+            for (int r = ed->view_row; r <= ed->cursor_row; r++) {
                 int len = buffer_line_len(buf, r);
-                if (r == ed->active_pane->cursor_row) {
+                if (r == ed->cursor_row) {
                     /* Only count up to (and including) the cursor's sub-row */
-                    screen_used += ed->active_pane->cursor_col / cols + 1;
+                    screen_used += ed->cursor_col / cols + 1;
                 } else {
                     screen_used += line_screen_rows(len, cols);
                 }
@@ -1969,7 +1955,7 @@ void editor_scroll(Editor *ed)
                 break;  /* cursor is visible — done */
 
             /* Cursor is below the viewport; advance view_row by one line */
-            ed->active_pane->view_row++;
+            ed->view_row++;
         }
 
     } else {
@@ -1981,23 +1967,23 @@ void editor_scroll(Editor *ed)
          */
 
         /* Vertical */
-        if (ed->active_pane->cursor_row < ed->active_pane->view_row)
-            ed->active_pane->view_row = ed->active_pane->cursor_row;
-        if (ed->active_pane->cursor_row >= ed->active_pane->view_row + rows)
-            ed->active_pane->view_row = ed->active_pane->cursor_row - rows + 1;
+        if (ed->cursor_row < ed->view_row)
+            ed->view_row = ed->cursor_row;
+        if (ed->cursor_row >= ed->view_row + rows)
+            ed->view_row = ed->cursor_row - rows + 1;
 
         /* Horizontal */
-        if (ed->active_pane->cursor_col < ed->active_pane->view_col)
-            ed->active_pane->view_col = ed->active_pane->cursor_col;
-        if (ed->active_pane->cursor_col >= ed->active_pane->view_col + cols)
-            ed->active_pane->view_col = ed->active_pane->cursor_col - cols + 1;
+        if (ed->cursor_col < ed->view_col)
+            ed->view_col = ed->cursor_col;
+        if (ed->cursor_col >= ed->view_col + cols)
+            ed->view_col = ed->cursor_col - cols + 1;
     }
 
     /* Clamp view_row so we never scroll past the end of the file */
     int max_view_row = buf->num_lines - 1;
-    if (ed->active_pane->view_row > max_view_row) ed->active_pane->view_row = max_view_row;
-    if (ed->active_pane->view_row < 0)           ed->active_pane->view_row = 0;
-    if (ed->active_pane->view_col < 0)           ed->active_pane->view_col = 0;
+    if (ed->view_row > max_view_row) ed->view_row = max_view_row;
+    if (ed->view_row < 0)           ed->view_row = 0;
+    if (ed->view_col < 0)           ed->view_col = 0;
 }
 
 /* ============================================================================
