@@ -416,6 +416,15 @@ static void input_process_git_panel_key(struct Editor *ed, int key)
         ed->show_git_panel  = 0;
         ed->git_panel_focus = 0;
         break;
+
+    case 's':         /* s — stage the highlighted file */
+        editor_stage_panel_file(ed);
+        break;
+
+    case 'u':         /* u — unstage the highlighted file (git reset HEAD) */
+        /* TODO: implement unstage */
+        editor_set_status(ed, "Unstage not yet implemented.");
+        break;
     }
 }
 
@@ -729,6 +738,9 @@ void input_process_key(struct Editor *ed)
         case KEY_F(11):        /* F11 — Stage hunk at cursor */
             editor_stage_hunk(ed);
             break;
+
+        /* Whole-file staging is available via the git status panel:
+         * F9 to open the panel, then 's' to stage the highlighted file. */
 
         case KEY_F(12):        /* F12 — Git commit */
             editor_git_commit(ed);

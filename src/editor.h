@@ -613,6 +613,22 @@ void editor_mark_region(Editor *ed);
  */
 void editor_toggle_git_panel(Editor *ed);
 
+/**
+ * editor_stage_file — stage the entire current file (Shift+F11 in editor).
+ *
+ * Runs `git add` on the current buffer's file.  Requires the file to be
+ * saved first.  Refreshes the git status panel if open.
+ */
+void editor_stage_file(Editor *ed);
+
+/**
+ * editor_stage_panel_file — stage the file under the cursor in the git
+ * status panel (Shift+F11 in panel).
+ *
+ * Stages the highlighted entry and refreshes the panel.
+ */
+void editor_stage_panel_file(Editor *ed);
+
 /* ---- Git blame view ------------------------------------------------------- */
 
 /**

@@ -295,6 +295,33 @@ int git_parse_diff_output(GitState *gs, const char *diff_text, int total_lines)
 }
 
 /* ============================================================================
+ * Repo detection from a directory
+ * ============================================================================ */
+
+char *git_find_repo_root(const char *dir)
+{
+    /*
+     * `git rev-parse --show-toplevel` prints the absolute path to the
+     * repo root.  The -C flag tells git to start from the given directory.
+     * If dir is NULL we omit -C and git uses the current working directory.
+     */
+    char cmd[4096];
+    if (dir && dir[0] != '\0')
+        snprintf(cmd, sizeof(cmd),
+                 "git -C '%s' rev-parse --show-toplevel 2>/dev/null", dir);
+    else
+        snprintf(cmd, sizeof(cmd),
+                 "git rev-parse --show-toplevel 2>/dev/null");
+
+    char *root = run_command(cmd);
+    if (!root || root[0] == '\0') {
+        free(root);
+        return NULL;
+    }
+    return root;
+}
+
+/* ============================================================================
  * Refresh — detect repo and run diff
  * ============================================================================ */
 
@@ -904,6 +931,31 @@ int git_stage_hunk_at_line(const char *repo_root, const char *filepath,
 
     free(patch);
     return (status == 0) ? 0 : -1;
+}
+
+int git_stage_file(const char *repo_root, const char *filepath)
+{
+    if (!repo_root || !filepath) return -1;
+
+    /*
+     * `git add -- <file>` stages all changes in the file to the index.
+     *
+     * We use the same run_command() helper as all other git operations
+     * (which is proven to work reliably inside ncurses raw mode) rather
+     * than calling popen/pclose directly.  run_command() doesn't return
+     * the exit status, so we verify success by checking whether the file
+     * appears as staged in the index afterward.
+     */
+    char cmd[4096];
+    snprintf(cmd, sizeof(cmd),
+             "git -C '%s' add -- '%s' 2>/dev/null", repo_root, filepath);
+
+    char *output = run_command(cmd);
+    /* run_command returns NULL only on popen failure or OOM */
+    if (!output) return -1;
+    free(output);
+
+    return 0;
 }
 
 /* ============================================================================

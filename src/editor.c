@@ -1935,14 +1935,24 @@ void editor_toggle_git_panel(Editor *ed)
         /*
          * Panel is hidden → show it.
          * Find the repo root from the current buffer's git state.
-         * If the file isn't in a repo, show an error and bail.
+         * If the buffer has no filename (e.g. opened with no arguments),
+         * git_state.repo_root will be NULL.  Fall back to detecting the
+         * repo from the current working directory.
          */
         Buffer *buf = editor_current_buffer(ed);
         const char *root = NULL;
+        char *cwd_root = NULL;   /* heap-allocated fallback, freed below */
+
         if (buf)
             root = buf->git_state.repo_root;
 
         if (!root || root[0] == '\0') {
+            cwd_root = git_find_repo_root(NULL);
+            root = cwd_root;
+        }
+
+        if (!root || root[0] == '\0') {
+            free(cwd_root);
             editor_set_status(ed, "Not in a git repository.");
             return;
         }
@@ -1951,6 +1961,7 @@ void editor_toggle_git_panel(Editor *ed)
         if (!ed->git_status) {
             ed->git_status = malloc(sizeof(GitStatusList));
             if (!ed->git_status) {
+                free(cwd_root);
                 editor_set_status(ed, "Error: out of memory");
                 return;
             }
@@ -1959,6 +1970,7 @@ void editor_toggle_git_panel(Editor *ed)
 
         /* Refresh the status list */
         git_status_refresh(ed->git_status, root);
+        free(cwd_root);  /* safe even if NULL */
 
         ed->show_git_panel = 1;
         ed->git_panel_focus = 1;
@@ -1984,10 +1996,105 @@ void editor_toggle_git_panel(Editor *ed)
          * and refresh the status.
          */
         Buffer *buf = editor_current_buffer(ed);
-        if (buf && buf->git_state.repo_root)
-            git_status_refresh(ed->git_status, buf->git_state.repo_root);
+        const char *rroot = (buf) ? buf->git_state.repo_root : NULL;
+        char *cwd_fallback = NULL;
+        if (!rroot || rroot[0] == '\0') {
+            cwd_fallback = git_find_repo_root(NULL);
+            rroot = cwd_fallback;
+        }
+        if (rroot && ed->git_status)
+            git_status_refresh(ed->git_status, rroot);
+        free(cwd_fallback);
 
         ed->git_panel_focus = 1;
+    }
+}
+
+/* ============================================================================
+ * File staging
+ * ============================================================================ */
+
+void editor_stage_file(Editor *ed)
+{
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf) return;
+
+    if (!buf->git_state.repo_root) {
+        editor_set_status(ed, "Not in a git repository.");
+        return;
+    }
+    if (!buf->filename) {
+        editor_set_status(ed, "Buffer has no filename.");
+        return;
+    }
+    if (buf->dirty) {
+        editor_set_status(ed, "Unsaved changes — save (Ctrl+S) before staging.");
+        return;
+    }
+
+    int result = git_stage_file(buf->git_state.repo_root, buf->filename);
+    if (result == 0) {
+        /* Extract just the filename for the status message */
+        const char *name = buf->filename;
+        const char *slash = strrchr(buf->filename, '/');
+        if (slash) name = slash + 1;
+
+        editor_set_status(ed, "Staged file: %s", name);
+
+        /* Refresh the git status panel if open */
+        if (ed->show_git_panel && ed->git_status
+                && buf->git_state.repo_root)
+            git_status_refresh(ed->git_status, buf->git_state.repo_root);
+    } else {
+        editor_set_status(ed, "Failed to stage file.");
+    }
+}
+
+void editor_stage_panel_file(Editor *ed)
+{
+    GitStatusList *gs = ed->git_status;
+    if (!gs) return;
+    if (gs->count <= 0) {
+        editor_set_status(ed, "No files to stage.");
+        return;
+    }
+    if (ed->git_panel_cursor < 0 || ed->git_panel_cursor >= gs->count)
+        return;
+    if (gs->repo_root[0] == '\0') {
+        editor_set_status(ed, "No repository root.");
+        return;
+    }
+
+    /*
+     * Copy the path and repo root BEFORE calling git_stage_file or
+     * git_status_refresh, because those calls may modify gs->entries.
+     */
+    char path_copy[1024];
+    char root_copy[1024];
+    strncpy(path_copy, gs->entries[ed->git_panel_cursor].path,
+            sizeof(path_copy) - 1);
+    path_copy[sizeof(path_copy) - 1] = '\0';
+    strncpy(root_copy, gs->repo_root, sizeof(root_copy) - 1);
+    root_copy[sizeof(root_copy) - 1] = '\0';
+
+    /* Build the full path from repo root + relative path */
+    char fullpath[2048];
+    snprintf(fullpath, sizeof(fullpath), "%s/%s", root_copy, path_copy);
+
+    int result = git_stage_file(root_copy, fullpath);
+    if (result == 0) {
+        editor_set_status(ed, "Staged: %s", path_copy);
+
+        /* Refresh the panel to reflect the new status */
+        git_status_refresh(gs, root_copy);
+
+        /* Clamp cursor if entries changed */
+        if (ed->git_panel_cursor >= gs->count && gs->count > 0)
+            ed->git_panel_cursor = gs->count - 1;
+        if (ed->git_panel_cursor < 0)
+            ed->git_panel_cursor = 0;
+    } else {
+        editor_set_status(ed, "Failed to stage: %s", path_copy);
     }
 }
 

@@ -171,6 +171,9 @@ void display_init(void)
 
         /* Blame annotations: dim cyan on default background */
         init_pair(CPAIR_BLAME, COLOR_CYAN, -1);
+
+        /* Staged files in the git status panel: green (matches git CLI) */
+        init_pair(CPAIR_GIT_STAGED, COLOR_GREEN, -1);
     }
 }
 
@@ -880,12 +883,42 @@ static void draw_git_panel(struct Editor *ed)
             printw("%-*s", GIT_PANEL_WIDTH - 1, line_buf);
             attroff(A_BOLD);
         } else {
-            /* Color by status: pick the more interesting of index/work */
-            char st = (e->work_status != ' ') ? e->work_status : e->index_status;
+            /*
+             * Color by status.
+             *
+             * Porcelain v1 format: "XY path"
+             *   X = index (staging area) status
+             *   Y = working tree status
+             *
+             * A file is "staged" when X is not ' ' or '?' — it has
+             * changes in the index ready to commit.  A file is "unstaged"
+             * when Y is not ' ' — it has working tree changes.
+             *
+             * Colors:
+             *   - Staged only (X != ' ', Y == ' '): green (CPAIR_GIT_STAGED)
+             *   - Unstaged M:  yellow (CPAIR_GIT_MODIFIED)
+             *   - Unstaged D:  red    (CPAIR_GIT_DELETED)
+             *   - New/added A: green  (CPAIR_GIT_ADDED)
+             *   - Untracked ?: default
+             *   - Both staged and unstaged: yellow (unstaged takes priority
+             *     since it needs attention)
+             */
             int cpair = 0;
-            if (st == 'M') cpair = CPAIR_GIT_MODIFIED;
-            else if (st == 'A') cpair = CPAIR_GIT_ADDED;
-            else if (st == 'D') cpair = CPAIR_GIT_DELETED;
+            int is_staged   = (e->index_status != ' ' && e->index_status != '?');
+            int is_unstaged = (e->work_status  != ' ' && e->work_status  != '?');
+
+            if (is_unstaged) {
+                /* Unstaged changes take priority (need action) */
+                if (e->work_status == 'M') cpair = CPAIR_GIT_MODIFIED;
+                else if (e->work_status == 'D') cpair = CPAIR_GIT_DELETED;
+                else if (e->work_status == 'A') cpair = CPAIR_GIT_ADDED;
+            } else if (is_staged) {
+                /* Fully staged — green to show it's ready to commit */
+                cpair = CPAIR_GIT_STAGED;
+            } else if (e->index_status == '?' && e->work_status == '?') {
+                /* Untracked — no color */
+                cpair = 0;
+            }
 
             if (cpair) attron(COLOR_PAIR(cpair));
             printw("%-*s", GIT_PANEL_WIDTH - 1, line_buf);

@@ -155,6 +155,7 @@ Produces the `./texty` binary.
 > **Note:** The git gutter (colored +/~/_  markers) is always visible for
 > tracked files. F11 requires the file to be saved first. Blame auto-clears
 > when you edit (line numbers shift); save and re-toggle to refresh.
+> To stage an entire file, use the git status panel (F9 → `s`).
 
 #### Git status panel (F9)
 
@@ -162,6 +163,7 @@ Produces the `./texty` binary.
 |------------------|-------------------------------------------------|
 | Up / Down        | Navigate entries                                |
 | Enter            | Open the highlighted file                       |
+| `s`              | Stage the highlighted file                      |
 | Escape           | Return focus to editor (panel stays open)       |
 | Ctrl+W           | Close the panel                                 |
 

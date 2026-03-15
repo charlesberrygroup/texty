@@ -81,6 +81,17 @@ typedef struct {
     int             is_tracked;
 } GitState;
 
+/**
+ * git_find_repo_root — detect the git repository root from a directory.
+ *
+ * Runs `git rev-parse --show-toplevel` from `dir`.  If `dir` is NULL,
+ * uses the current working directory.
+ *
+ * Returns a heap-allocated absolute path (caller must free), or NULL
+ * if the directory is not inside a git repository.
+ */
+char *git_find_repo_root(const char *dir);
+
 /* ---- Functions ------------------------------------------------------------ */
 
 /**
@@ -248,6 +259,16 @@ char *git_build_hunk_patch(const char *diff_text, int target_line);
  */
 int git_stage_hunk_at_line(const char *repo_root, const char *filepath,
                            int target_line);
+
+/**
+ * git_stage_file — stage an entire file (`git add <file>`).
+ *
+ * `repo_root` is the git repo root path.
+ * `filepath`  is the absolute path to the file.
+ *
+ * Returns 0 on success, -1 on error.
+ */
+int git_stage_file(const char *repo_root, const char *filepath);
 
 /* ---- Committing ----------------------------------------------------------- */
 

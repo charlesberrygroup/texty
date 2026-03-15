@@ -121,6 +121,9 @@ struct Editor;
 /** CPAIR_BLAME — dim cyan text for blame annotations (author + date). */
 #define CPAIR_BLAME            27
 
+/** CPAIR_GIT_STAGED — green text for staged files in the git status panel. */
+#define CPAIR_GIT_STAGED       28
+
 /**
  * BLAME_WIDTH — column width of the blame annotation panel.
  *
