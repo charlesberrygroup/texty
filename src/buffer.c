@@ -120,6 +120,9 @@ Buffer *buffer_create(void)
     }
     buf->num_lines = 1;
 
+    /* Initialise git state — will be populated by git_refresh() later */
+    git_state_init(&buf->git_state);
+
     return buf;
 }
 
@@ -132,6 +135,11 @@ void buffer_destroy(Buffer *buf)
 
     free(buf->lines);
     free(buf->filename);
+    git_state_free(&buf->git_state);
+    
+    
+    
+    
     free(buf);
 }
 

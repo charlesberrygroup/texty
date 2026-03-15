@@ -13,6 +13,7 @@
 #include "display.h"    /* for GUTTER_WIDTH, FILETREE_WIDTH */
 #include "undo.h"
 #include "filetree.h"   /* for FileTree, filetree_create, filetree_rebuild, etc. */
+#include "git.h"        /* for git_refresh — called on open/save */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -329,6 +330,10 @@ int editor_open_file(Editor *ed, const char *path)
     restore_cursor_from_buffer(ed);
     editor_selection_clear(ed);
 
+    /* Detect git repo and populate line change markers */
+    if (buf->filename)
+        git_refresh(&buf->git_state, buf->filename, buf->num_lines);
+
     return 0;
 }
 
@@ -372,6 +377,10 @@ int editor_save(Editor *ed)
     }
 
     editor_set_status(ed, "Saved \"%s\"", buf->filename);
+
+    /* Refresh git line markers after saving */
+    git_refresh(&buf->git_state, buf->filename, buf->num_lines);
+
     return 0;
 }
 

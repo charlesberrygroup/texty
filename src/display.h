@@ -102,6 +102,11 @@ struct Editor;
 /** CPAIR_REGION — red foreground used for the region box border (Ctrl+U). */
 #define CPAIR_REGION          21
 
+/* ---- Git gutter marker color pairs --------------------------------------- */
+#define CPAIR_GIT_ADDED    22   /* Green  — line added (new)               */
+#define CPAIR_GIT_MODIFIED 23   /* Yellow — line content changed            */
+#define CPAIR_GIT_DELETED  24   /* Red    — line(s) deleted after this line */
+
 /* ---- Functions ------------------------------------------------------------ */
 
 /**

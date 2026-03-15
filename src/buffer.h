@@ -23,6 +23,7 @@
 #define BUFFER_H
 
 #include "undo.h"   /* UndoStack — each buffer tracks its own edit history */
+#include "git.h"    /* GitState — per-buffer git line change markers */
 
 /* ---- Constants ------------------------------------------------------------ */
 
@@ -82,6 +83,13 @@ typedef struct {
     /* Saved viewport position */
     int        view_row;
     int        view_col;
+
+    /*
+     * Git integration — tracks which lines changed relative to HEAD.
+     * Populated by git_refresh() on file open and save.
+     * When git_state.line_status is NULL, no markers are shown.
+     */
+    GitState   git_state;
 } Buffer;
 
 /* ---- Lifecycle ------------------------------------------------------------ */

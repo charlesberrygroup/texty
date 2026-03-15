@@ -14,6 +14,7 @@
 #include "buffer.h"
 #include "syntax.h"
 #include "filetree.h"   /* for FileTree, FlatEntry, filetree_is_expanded */
+#include "git.h"        /* for GitLineStatus, GitState */
 
 #include <ncurses.h>
 #include <string.h>
@@ -156,6 +157,11 @@ void display_init(void)
          * background color of any text.
          */
         init_pair(CPAIR_REGION, COLOR_RED, -1);
+
+        /* Git gutter markers */
+        init_pair(CPAIR_GIT_ADDED,    COLOR_GREEN,  -1);
+        init_pair(CPAIR_GIT_MODIFIED, COLOR_YELLOW, -1);
+        init_pair(CPAIR_GIT_DELETED,  COLOR_RED,    -1);
     }
 }
 
@@ -668,6 +674,47 @@ static void draw_region_hborder(int screen_row, int panel_w,
     attroff(COLOR_PAIR(CPAIR_REGION));
 }
 
+/*
+ * draw_git_marker — draw the git gutter marker for a single buffer line.
+ *
+ * Replaces the trailing space in the line-number gutter with a colored
+ * character when the line has changed relative to HEAD:
+ *   - ADDED:    green '+'
+ *   - MODIFIED: yellow '~'
+ *   - DELETED:  red '_' (marks the line above a deletion point)
+ *   - UNCHANGED or no git data: plain space ' '
+ *
+ * `gs` is the buffer's GitState.  `buf_row` is the 0-based line index.
+ */
+static void draw_git_marker(const GitState *gs, int buf_row)
+{
+    if (!gs || !gs->line_status || buf_row < 0 || buf_row >= gs->line_count) {
+        addch(' ');   /* no git info — normal trailing space */
+        return;
+    }
+
+    switch (gs->line_status[buf_row]) {
+    case GIT_LINE_ADDED:
+        attron(COLOR_PAIR(CPAIR_GIT_ADDED));
+        addch('+');
+        attroff(COLOR_PAIR(CPAIR_GIT_ADDED));
+        break;
+    case GIT_LINE_MODIFIED:
+        attron(COLOR_PAIR(CPAIR_GIT_MODIFIED));
+        addch('~');
+        attroff(COLOR_PAIR(CPAIR_GIT_MODIFIED));
+        break;
+    case GIT_LINE_DELETED:
+        attron(COLOR_PAIR(CPAIR_GIT_DELETED));
+        addch('_');
+        attroff(COLOR_PAIR(CPAIR_GIT_DELETED));
+        break;
+    default:
+        addch(' ');   /* unchanged */
+        break;
+    }
+}
+
 static void draw_editor_area(struct Editor *ed)
 {
     Buffer *buf = editor_current_buffer(ed);
@@ -871,20 +918,25 @@ static void draw_editor_area(struct Editor *ed)
                 attron(COLOR_PAIR(CPAIR_GUTTER));
                 if (segment == 0) {
                     /*
-                     * First segment of this line: show the line number.
-                     * Bold on the cursor row for emphasis.
+                     * First segment: git marker + line number.
+                     * Column 0 is the git marker (colored +/~/_) or space.
+                     * Columns 1-4 are the right-aligned line number.
                      */
+                    attroff(COLOR_PAIR(CPAIR_GUTTER));
+                    draw_git_marker(&buf->git_state, buf_row);
+                    attron(COLOR_PAIR(CPAIR_GUTTER));
                     if (is_cursor_row) attron(A_BOLD);
-                    printw("%4d ", buf_row + 1);
+                    printw("%3d ", buf_row + 1);
                     if (is_cursor_row) attroff(A_BOLD);
+                    attroff(COLOR_PAIR(CPAIR_GUTTER));
                 } else {
                     /*
                      * Continuation segment: leave gutter blank (no line number)
                      * so the wrapped text looks like a continuation of the line.
                      */
                     printw("     ");
+                    attroff(COLOR_PAIR(CPAIR_GUTTER));
                 }
-                attroff(COLOR_PAIR(CPAIR_GUTTER));
             }
 
             /* ---- Compute the visible slice of this segment ---- */
@@ -1104,9 +1156,11 @@ static void draw_editor_area(struct Editor *ed)
                 if (is_cursor_row) attroff(A_BOLD);
                 attroff(COLOR_PAIR(CPAIR_REGION));
             } else {
+                /* Column 0: git marker, columns 1-4: line number + space */
+                draw_git_marker(&buf->git_state, buf_row);
                 attron(COLOR_PAIR(CPAIR_GUTTER));
                 if (is_cursor_row) attron(A_BOLD);
-                printw("%4d ", buf_row + 1);
+                printw("%3d ", buf_row + 1);
                 if (is_cursor_row) attroff(A_BOLD);
                 attroff(COLOR_PAIR(CPAIR_GUTTER));
             }
