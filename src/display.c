@@ -602,7 +602,7 @@ static void draw_editor_area(struct Editor *ed)
             }
 
             int is_cursor_row = (buf_row == ed->cursor_row);
-            int row_attr      = is_cursor_row ? A_REVERSE : A_NORMAL;
+            int row_attr      = A_NORMAL;  /* no full-line highlight */
 
             /* ---- Gutter ---- */
             attron(COLOR_PAIR(CPAIR_GUTTER));
@@ -810,11 +810,10 @@ static void draw_editor_area(struct Editor *ed)
             /* ---- Set up the base attribute for unselected text on this row --- */
 
             /*
-             * Cursor row uses A_REVERSE (reverse video) to highlight the line.
-             * Other rows use A_NORMAL (terminal defaults).
+             * All rows use A_NORMAL (terminal defaults).
              * Selected segments always use CPAIR_SELECTION regardless of row.
              */
-            int row_attr = is_cursor_row ? A_REVERSE : A_NORMAL;
+            int row_attr = A_NORMAL;  /* no full-line highlight */
 
             /* ---- Compute what slice of the line is visible on screen --------- */
 
