@@ -263,6 +263,21 @@ typedef struct Editor {
      * in the diff, positioned at the correct buffer line.
      */
     GitDiffChunks inline_diff;
+
+    /* ---- Git blame view --------------------------------------------------- */
+
+    /*
+     * show_git_blame — when non-zero, a blame annotation column is drawn
+     * between the gutter and the text area, showing author + date per line.
+     * Toggle with Shift+F9 (KEY_F(21) in ncurses).
+     */
+    int      show_git_blame;
+
+    /*
+     * git_blame — parsed blame data for the current buffer.
+     * Populated when blame is toggled on, cleared when toggled off.
+     */
+    GitBlameData git_blame;
 } Editor;
 
 /* ---- Lifecycle ------------------------------------------------------------ */
@@ -597,6 +612,20 @@ void editor_mark_region(Editor *ed);
  * If visible and unfocused: gives the panel focus.
  */
 void editor_toggle_git_panel(Editor *ed);
+
+/* ---- Git blame view ------------------------------------------------------- */
+
+/**
+ * editor_toggle_git_blame — toggle the blame annotation column (Shift+F9).
+ *
+ * When toggled on: runs `git blame --porcelain`, parses annotations, and
+ * displays author + date next to each line.  When toggled off: clears the
+ * blame data and restores the full text width.
+ *
+ * Blame is cleared automatically when the buffer becomes dirty (edits
+ * shift lines, making blame inaccurate).  Save and re-toggle to refresh.
+ */
+void editor_toggle_git_blame(Editor *ed);
 
 /* ---- Git commit ----------------------------------------------------------- */
 

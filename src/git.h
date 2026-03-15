@@ -273,6 +273,67 @@ int git_has_staged_changes(const char *repo_root);
  */
 int git_commit(const char *repo_root, const char *message);
 
+/* ---- Git blame ------------------------------------------------------------ */
+
+/*
+ * GitBlameLine — annotation for a single buffer line.
+ *
+ * Stores a truncated author name, a short date, and a short commit SHA.
+ * Populated by git_parse_blame_output() from `git blame --porcelain`.
+ */
+typedef struct {
+    char author[32];    /* truncated author name, e.g. "John Doe"       */
+    char date[11];      /* "YYYY-MM-DD" from author-time epoch          */
+    char sha_short[8];  /* first 7 chars of SHA + null terminator       */
+} GitBlameLine;
+
+/*
+ * GitBlameData — blame annotations for an entire file.
+ *
+ * Heap-allocated array of GitBlameLine, one per buffer line (0-based).
+ * Populated by git_blame_refresh(), freed by git_blame_free().
+ */
+typedef struct {
+    GitBlameLine *lines;    /* array indexed by 0-based buffer line */
+    int           count;    /* number of valid entries              */
+    int           capacity; /* allocated slots                      */
+} GitBlameData;
+
+/**
+ * git_parse_blame_output — parse `git blame --porcelain` output.
+ *
+ * Pure parsing function — no popen, no side effects.  Exposed publicly
+ * so it can be unit-tested with known input strings.
+ *
+ * Porcelain format overview:
+ *   - First occurrence of a commit: 40-char SHA + orig_line + final_line + group_count
+ *     followed by "author <name>", "author-time <epoch>", etc.
+ *   - Subsequent lines from the same commit: 40-char SHA + orig_line + final_line
+ *     (no metadata headers — reuse cached info for that SHA).
+ *   - Content lines are prefixed with a tab character.
+ *
+ * `total_lines` is the number of lines in the buffer — used to size the array.
+ *
+ * Returns 0 on success, -1 on error.
+ */
+int git_parse_blame_output(GitBlameData *bd, const char *text, int total_lines);
+
+/**
+ * git_blame_refresh — run `git blame --porcelain` and populate blame data.
+ *
+ * Shells out to git and parses the result.  Clears any existing data first.
+ * Returns 0 on success, -1 on error.
+ */
+int git_blame_refresh(GitBlameData *bd, const char *repo_root,
+                      const char *filepath, int total_lines);
+
+/**
+ * git_blame_free — free all memory in a GitBlameData.
+ *
+ * Safe to call on a zeroed or already-freed GitBlameData.
+ */
+void git_blame_free(GitBlameData *bd);
+
 /* ---- Git status list (for the status panel) ------------------------------- */
 
 /** Maximum number of entries in a git status listing. */

@@ -863,6 +863,222 @@ TEST(test_commit_null_args)
 }
 
 /* ============================================================================
+ * Blame parsing
+ *
+ * These tests verify git_parse_blame_output(), which parses the output of
+ * `git blame --porcelain` into GitBlameLine structs (author, date, sha).
+ * ============================================================================ */
+
+TEST(test_blame_parse_null)
+{
+    GitBlameData bd;
+    memset(&bd, 0, sizeof(bd));
+
+    ASSERT(git_parse_blame_output(&bd, NULL, 5) == 0, "NULL text returns 0");
+    ASSERT(bd.count == 0, "no lines from NULL text");
+
+    git_blame_free(&bd);
+}
+
+TEST(test_blame_parse_empty)
+{
+    GitBlameData bd;
+    memset(&bd, 0, sizeof(bd));
+
+    ASSERT(git_parse_blame_output(&bd, "", 5) == 0, "empty text returns 0");
+    ASSERT(bd.count == 0, "no lines from empty text");
+
+    git_blame_free(&bd);
+}
+
+TEST(test_blame_parse_single_line)
+{
+    /*
+     * Porcelain output for one commit, one line.
+     * The SHA line has 3 numbers: orig_line final_line group_count.
+     * Then author, author-time headers, then a tab-prefixed content line.
+     */
+    const char *text =
+        "abcdef1234567890abcdef1234567890abcdef12 1 1 1\n"
+        "author John Doe\n"
+        "author-mail <john@example.com>\n"
+        "author-time 1617283200\n"
+        "author-tz -0700\n"
+        "committer John Doe\n"
+        "committer-mail <john@example.com>\n"
+        "committer-time 1617283200\n"
+        "committer-tz -0700\n"
+        "summary Some commit message\n"
+        "filename file.c\n"
+        "\tint main() {\n";
+
+    GitBlameData bd;
+    memset(&bd, 0, sizeof(bd));
+
+    int result = git_parse_blame_output(&bd, text, 1);
+    ASSERT(result == 0, "parse succeeds");
+    ASSERT(bd.count == 1, "one line");
+    ASSERT(strcmp(bd.lines[0].author, "John Doe") == 0, "author");
+    ASSERT(strcmp(bd.lines[0].date, "2021-04-01") == 0, "date from epoch");
+    ASSERT(strcmp(bd.lines[0].sha_short, "abcdef1") == 0, "sha_short");
+
+    git_blame_free(&bd);
+}
+
+TEST(test_blame_parse_multi_line_same_commit)
+{
+    /*
+     * Two lines from the same commit.  The first occurrence has 3 numbers
+     * and metadata headers.  The second has only 2 numbers (no metadata).
+     */
+    const char *text =
+        "abcdef1234567890abcdef1234567890abcdef12 1 1 2\n"
+        "author Alice\n"
+        "author-mail <alice@test.com>\n"
+        "author-time 1700000000\n"
+        "author-tz +0000\n"
+        "committer Alice\n"
+        "committer-mail <alice@test.com>\n"
+        "committer-time 1700000000\n"
+        "committer-tz +0000\n"
+        "summary First commit\n"
+        "filename test.c\n"
+        "\tline one\n"
+        "abcdef1234567890abcdef1234567890abcdef12 2 2\n"
+        "\tline two\n";
+
+    GitBlameData bd;
+    memset(&bd, 0, sizeof(bd));
+
+    git_parse_blame_output(&bd, text, 2);
+    ASSERT(bd.count == 2, "two lines");
+    ASSERT(strcmp(bd.lines[0].author, "Alice") == 0, "line 0 author");
+    ASSERT(strcmp(bd.lines[1].author, "Alice") == 0, "line 1 author (cached)");
+    ASSERT(strcmp(bd.lines[0].date, bd.lines[1].date) == 0,
+           "same date for both lines");
+
+    git_blame_free(&bd);
+}
+
+TEST(test_blame_parse_multiple_commits)
+{
+    /*
+     * Two lines from different commits.
+     */
+    const char *text =
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 1 1 1\n"
+        "author Alice\n"
+        "author-mail <a@t.com>\n"
+        "author-time 1700000000\n"
+        "author-tz +0000\n"
+        "committer Alice\n"
+        "committer-mail <a@t.com>\n"
+        "committer-time 1700000000\n"
+        "committer-tz +0000\n"
+        "summary Commit A\n"
+        "filename f.c\n"
+        "\tline one\n"
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 1 2 1\n"
+        "author Bob\n"
+        "author-mail <b@t.com>\n"
+        "author-time 1710000000\n"
+        "author-tz +0000\n"
+        "committer Bob\n"
+        "committer-mail <b@t.com>\n"
+        "committer-time 1710000000\n"
+        "committer-tz +0000\n"
+        "summary Commit B\n"
+        "filename f.c\n"
+        "\tline two\n";
+
+    GitBlameData bd;
+    memset(&bd, 0, sizeof(bd));
+
+    git_parse_blame_output(&bd, text, 2);
+    ASSERT(bd.count == 2, "two lines");
+    ASSERT(strcmp(bd.lines[0].author, "Alice") == 0, "line 0 = Alice");
+    ASSERT(strcmp(bd.lines[1].author, "Bob") == 0,   "line 1 = Bob");
+    ASSERT(strcmp(bd.lines[0].sha_short, "aaaaaaa") == 0, "sha 0");
+    ASSERT(strcmp(bd.lines[1].sha_short, "bbbbbbb") == 0, "sha 1");
+
+    git_blame_free(&bd);
+}
+
+TEST(test_blame_parse_uncommitted)
+{
+    /*
+     * Uncommitted changes show all-zeros SHA.
+     * Should get "Not committed" as author and empty date.
+     */
+    const char *text =
+        "0000000000000000000000000000000000000000 1 1 1\n"
+        "author Not Committed Yet\n"
+        "author-mail <not.committed.yet>\n"
+        "author-time 1700000000\n"
+        "author-tz +0000\n"
+        "committer Not Committed Yet\n"
+        "committer-mail <not.committed.yet>\n"
+        "committer-time 1700000000\n"
+        "committer-tz +0000\n"
+        "summary \n"
+        "filename f.c\n"
+        "\tnew line\n";
+
+    GitBlameData bd;
+    memset(&bd, 0, sizeof(bd));
+
+    git_parse_blame_output(&bd, text, 1);
+    ASSERT(bd.count == 1, "one line");
+    ASSERT(strcmp(bd.lines[0].author, "Not committed") == 0,
+           "uncommitted author");
+    ASSERT(bd.lines[0].date[0] == '\0', "uncommitted has no date");
+
+    git_blame_free(&bd);
+}
+
+TEST(test_blame_parse_author_truncation)
+{
+    /*
+     * Author name longer than 31 chars should be safely truncated.
+     */
+    const char *text =
+        "abcdef1234567890abcdef1234567890abcdef12 1 1 1\n"
+        "author This Is A Very Long Author Name That Exceeds The Buffer\n"
+        "author-mail <long@example.com>\n"
+        "author-time 1617283200\n"
+        "author-tz +0000\n"
+        "committer Test\n"
+        "committer-mail <test@t.com>\n"
+        "committer-time 1617283200\n"
+        "committer-tz +0000\n"
+        "summary Truncation test\n"
+        "filename f.c\n"
+        "\tcontent\n";
+
+    GitBlameData bd;
+    memset(&bd, 0, sizeof(bd));
+
+    git_parse_blame_output(&bd, text, 1);
+    ASSERT(bd.count == 1, "one line");
+    ASSERT((int)strlen(bd.lines[0].author) <= 31,
+           "author truncated to fit buffer");
+
+    git_blame_free(&bd);
+}
+
+TEST(test_blame_free_idempotent)
+{
+    GitBlameData bd;
+    memset(&bd, 0, sizeof(bd));
+
+    git_blame_free(&bd);
+    ASSERT(bd.lines == NULL, "lines NULL after free");
+
+    git_blame_free(&bd);
+    ASSERT(1, "double free did not crash");
+}
+
+/* ============================================================================
  * main
  * ============================================================================ */
 
@@ -906,6 +1122,16 @@ int main(void)
 
     /* Commit edge cases */
     RUN(test_commit_null_args);
+
+    /* Blame parsing */
+    RUN(test_blame_parse_null);
+    RUN(test_blame_parse_empty);
+    RUN(test_blame_parse_single_line);
+    RUN(test_blame_parse_multi_line_same_commit);
+    RUN(test_blame_parse_multiple_commits);
+    RUN(test_blame_parse_uncommitted);
+    RUN(test_blame_parse_author_truncation);
+    RUN(test_blame_free_idempotent);
 
     TEST_SUMMARY();
 }

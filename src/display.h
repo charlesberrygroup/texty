@@ -118,6 +118,17 @@ struct Editor;
 /** CPAIR_GIT_OLD_LINE — red text for phantom (deleted/old) lines in inline diff. */
 #define CPAIR_GIT_OLD_LINE     26
 
+/** CPAIR_BLAME — dim cyan text for blame annotations (author + date). */
+#define CPAIR_BLAME            27
+
+/**
+ * BLAME_WIDTH — column width of the blame annotation panel.
+ *
+ * Format: "author     YYYY-MM-DD " (10-char author + space + 10-char date + space)
+ * = 22 characters + 1 separator '|' = 23.
+ */
+#define BLAME_WIDTH            23
+
 /* ---- Functions ------------------------------------------------------------ */
 
 /**

@@ -21,6 +21,7 @@
 #include "editor.h"
 #include "display.h"
 #include "filetree.h"  /* for FileTree, FlatEntry, filetree_toggle, etc. */
+#include "git.h"       /* for git_blame_free — used by auto-clear blame */
 
 #include <stdlib.h>    /* for free() */
 #include <stdio.h>     /* for fopen(), fclose() */
@@ -733,6 +734,12 @@ void input_process_key(struct Editor *ed)
             editor_git_commit(ed);
             break;
 
+        case KEY_F(21):        /* Shift+F9 — Toggle git blame view
+                                * ncurses maps Shift+F(n) to F(n+12),
+                                * so Shift+F9 = KEY_F(21). */
+            editor_toggle_git_blame(ed);
+            break;
+
         case CTRL('b'):        /* Ctrl+B — Toggle file explorer panel */
             /*
              * editor_toggle_filetree() handles all the logic:
@@ -832,5 +839,21 @@ void input_process_key(struct Editor *ed)
                 ed->status_msg[0] = '\0';
             }
             break;
+    }
+
+    /*
+     * Auto-clear blame when the buffer is modified.
+     *
+     * Blame annotations are tied to committed line numbers.  When the user
+     * inserts or deletes text, the line numbers shift and the annotations
+     * become inaccurate.  Rather than showing wrong data, we clear blame
+     * automatically.  The user can save and re-toggle to refresh.
+     */
+    if (ed->show_git_blame) {
+        Buffer *cur = editor_current_buffer(ed);
+        if (cur && cur->dirty) {
+            ed->show_git_blame = 0;
+            git_blame_free(&ed->git_blame);
+        }
     }
 }

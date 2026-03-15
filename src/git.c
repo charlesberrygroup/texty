@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>      /* for gmtime, strftime — used by blame date parsing */
 
 /* ============================================================================
  * Lifecycle
@@ -969,6 +970,287 @@ int git_commit(const char *repo_root, const char *message)
 
     int status = pclose(fp);
     return (status == 0) ? 0 : -1;
+}
+
+/* ============================================================================
+ * Git blame
+ * ============================================================================ */
+
+void git_blame_free(GitBlameData *bd)
+{
+    if (!bd) return;
+    free(bd->lines);
+    bd->lines    = NULL;
+    bd->count    = 0;
+    bd->capacity = 0;
+}
+
+/*
+ * BlameCache — small cache of recently-seen commit metadata.
+ *
+ * The porcelain format only prints author/time headers on the FIRST
+ * occurrence of each commit SHA.  Subsequent lines from the same commit
+ * just print the SHA.  We cache the metadata so we can look it up.
+ *
+ * A linear scan of 256 entries is plenty — most files have far fewer
+ * unique commits in their blame output.
+ */
+#define BLAME_CACHE_MAX 256
+
+typedef struct {
+    char sha[41];       /* full 40-char SHA + null */
+    char author[32];
+    char date[11];      /* "YYYY-MM-DD" */
+    char sha_short[8];  /* first 7 chars */
+} BlameCacheEntry;
+
+/*
+ * epoch_to_date — convert a Unix timestamp string to "YYYY-MM-DD".
+ *
+ * `epoch_str` is a decimal string like "1617283200".
+ * Writes the result into `out` which must be at least 11 bytes.
+ * On failure, writes an empty string.
+ */
+static void epoch_to_date(const char *epoch_str, char *out, int out_size)
+{
+    out[0] = '\0';
+    if (!epoch_str) return;
+
+    /*
+     * strtol converts the string to a long integer.
+     * We then use gmtime() to break it into year/month/day components,
+     * and strftime() to format it as "YYYY-MM-DD".
+     *
+     * gmtime() returns UTC time, which is good enough for blame dates.
+     */
+    long epoch = strtol(epoch_str, NULL, 10);
+    if (epoch <= 0) return;
+
+    time_t t = (time_t)epoch;
+    struct tm *tm = gmtime(&t);
+    if (!tm) return;
+
+    strftime(out, out_size, "%Y-%m-%d", tm);
+}
+
+/*
+ * is_hex_sha — check if a string starts with 40 hex characters.
+ *
+ * The porcelain format begins each blame entry with a 40-char SHA.
+ * This helper identifies those lines so we can distinguish them from
+ * metadata headers like "author ..." and content lines (tab-prefixed).
+ */
+static int is_hex_sha(const char *s)
+{
+    for (int i = 0; i < 40; i++) {
+        char c = s[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+            return 0;
+    }
+    return 1;
+}
+
+int git_parse_blame_output(GitBlameData *bd, const char *text, int total_lines)
+{
+    if (!bd) return -1;
+
+    /* Clear any existing data */
+    git_blame_free(bd);
+
+    if (!text || text[0] == '\0' || total_lines <= 0) return 0;
+
+    /* Allocate the output array */
+    bd->lines = calloc(total_lines, sizeof(GitBlameLine));
+    if (!bd->lines) return -1;
+    bd->count    = total_lines;
+    bd->capacity = total_lines;
+
+    /*
+     * Cache for commit metadata.  Heap-allocated to avoid a large
+     * stack frame (~12 KB).
+     */
+    BlameCacheEntry *cache = calloc(BLAME_CACHE_MAX, sizeof(BlameCacheEntry));
+    if (!cache) return -1;
+    int cache_count = 0;
+
+    const char *p = text;
+
+    /*
+     * cur_* track the metadata for the commit currently being parsed.
+     * These are filled in from "author" and "author-time" header lines,
+     * then applied to the blame entry when we reach the content line.
+     */
+    char cur_sha[41]      = "";
+    char cur_author[32]   = "";
+    char cur_date[11]     = "";
+    char cur_sha_short[8] = "";
+    int  cur_final_line   = -1;   /* 1-based final line number */
+
+    while (*p) {
+        /* Find end of current line */
+        const char *eol = p;
+        while (*eol && *eol != '\n') eol++;
+        int line_len = (int)(eol - p);
+
+        if (line_len >= 40 && p[40] == ' ' && is_hex_sha(p)) {
+            /*
+             * SHA line: "<40-hex> <orig_line> <final_line> [<group_count>]"
+             *
+             * This starts a new blame entry.  Parse the SHA and final_line
+             * (the 1-based line number in the current file).
+             */
+            /* Copy SHA */
+            memcpy(cur_sha, p, 40);
+            cur_sha[40] = '\0';
+
+            /* Short SHA: first 7 chars */
+            memcpy(cur_sha_short, p, 7);
+            cur_sha_short[7] = '\0';
+
+            /* Parse final_line (second number after SHA) */
+            int orig_line = 0, final_line = 0;
+            sscanf(p + 41, "%d %d", &orig_line, &final_line);
+            cur_final_line = final_line;
+
+            /*
+             * Check if this SHA is already in the cache.
+             * If so, copy the cached author/date into cur_*.
+             * If not, we'll fill cur_author/cur_date from the
+             * upcoming "author" and "author-time" header lines.
+             */
+            int found = 0;
+            for (int i = 0; i < cache_count; i++) {
+                if (strcmp(cache[i].sha, cur_sha) == 0) {
+                    strncpy(cur_author, cache[i].author,
+                            sizeof(cur_author) - 1);
+                    cur_author[sizeof(cur_author) - 1] = '\0';
+                    strncpy(cur_date, cache[i].date,
+                            sizeof(cur_date) - 1);
+                    cur_date[sizeof(cur_date) - 1] = '\0';
+                    found = 1;
+                    break;
+                }
+            }
+
+            if (!found) {
+                /* New SHA — reset cur_author/cur_date.
+                 * They'll be filled by the upcoming header lines. */
+                cur_author[0] = '\0';
+                cur_date[0]   = '\0';
+            }
+
+        } else if (line_len > 7 && strncmp(p, "author ", 7) == 0) {
+            /*
+             * "author <name>" header — appears only on first occurrence
+             * of each SHA.  Copy the name (truncated to fit).
+             */
+            int name_len = line_len - 7;
+            if (name_len > (int)sizeof(cur_author) - 1)
+                name_len = (int)sizeof(cur_author) - 1;
+            memcpy(cur_author, p + 7, name_len);
+            cur_author[name_len] = '\0';
+
+        } else if (line_len > 12 && strncmp(p, "author-time ", 12) == 0) {
+            /*
+             * "author-time <epoch>" header — Unix timestamp.
+             * Convert to "YYYY-MM-DD" for display.
+             */
+            char epoch_buf[32];
+            int elen = line_len - 12;
+            if (elen > (int)sizeof(epoch_buf) - 1)
+                elen = (int)sizeof(epoch_buf) - 1;
+            memcpy(epoch_buf, p + 12, elen);
+            epoch_buf[elen] = '\0';
+            epoch_to_date(epoch_buf, cur_date, sizeof(cur_date));
+
+            /*
+             * After author-time, we have all the metadata we need for
+             * this SHA.  Cache it for future lines from the same commit.
+             */
+            if (cache_count < BLAME_CACHE_MAX) {
+                BlameCacheEntry *ce = &cache[cache_count++];
+                strncpy(ce->sha, cur_sha, sizeof(ce->sha) - 1);
+                ce->sha[sizeof(ce->sha) - 1] = '\0';
+                strncpy(ce->author, cur_author, sizeof(ce->author) - 1);
+                ce->author[sizeof(ce->author) - 1] = '\0';
+                strncpy(ce->date, cur_date, sizeof(ce->date) - 1);
+                ce->date[sizeof(ce->date) - 1] = '\0';
+                strncpy(ce->sha_short, cur_sha_short,
+                        sizeof(ce->sha_short) - 1);
+                ce->sha_short[sizeof(ce->sha_short) - 1] = '\0';
+            }
+
+        } else if (line_len > 0 && p[0] == '\t') {
+            /*
+             * Content line (tab-prefixed) — this marks the END of a
+             * blame entry.  Apply the accumulated metadata to the
+             * output array at the correct line index.
+             *
+             * For uncommitted lines (all-zeros SHA), override whatever
+             * the "author" header said with "Not committed" and clear
+             * the date.  We do this here (not at SHA detection time)
+             * because the "author" header comes AFTER the SHA line and
+             * would overwrite our override.
+             */
+            int all_zero = 1;
+            for (int z = 0; z < 40 && cur_sha[z]; z++) {
+                if (cur_sha[z] != '0') { all_zero = 0; break; }
+            }
+            if (all_zero && cur_sha[0] == '0') {
+                strncpy(cur_author, "Not committed",
+                        sizeof(cur_author) - 1);
+                cur_author[sizeof(cur_author) - 1] = '\0';
+                cur_date[0] = '\0';
+            }
+
+            int idx = cur_final_line - 1;  /* convert to 0-based */
+            if (idx >= 0 && idx < total_lines) {
+                GitBlameLine *bl = &bd->lines[idx];
+                strncpy(bl->author, cur_author, sizeof(bl->author) - 1);
+                bl->author[sizeof(bl->author) - 1] = '\0';
+                strncpy(bl->date, cur_date, sizeof(bl->date) - 1);
+                bl->date[sizeof(bl->date) - 1] = '\0';
+                strncpy(bl->sha_short, cur_sha_short,
+                        sizeof(bl->sha_short) - 1);
+                bl->sha_short[sizeof(bl->sha_short) - 1] = '\0';
+            }
+        }
+        /* else: skip other header lines (committer, summary, etc.) */
+
+        /* Advance to the next line */
+        p = eol;
+        if (*p == '\n') p++;
+    }
+
+    free(cache);
+    return 0;
+}
+
+int git_blame_refresh(GitBlameData *bd, const char *repo_root,
+                      const char *filepath, int total_lines)
+{
+    if (!bd || !repo_root || !filepath) return -1;
+
+    git_blame_free(bd);
+
+    /*
+     * `git blame --porcelain` produces machine-readable blame output.
+     * We use the absolute filepath for reliability.
+     */
+    char cmd[4096];
+    snprintf(cmd, sizeof(cmd),
+             "git -C '%s' blame --porcelain -- '%s' 2>/dev/null",
+             repo_root, filepath);
+
+    char *output = run_command(cmd);
+    if (!output || output[0] == '\0') {
+        free(output);
+        return -1;
+    }
+
+    int result = git_parse_blame_output(bd, output, total_lines);
+    free(output);
+    return result;
 }
 
 /* ============================================================================

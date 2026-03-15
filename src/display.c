@@ -168,6 +168,9 @@ void display_init(void)
 
         /* Inline diff: phantom (old/deleted) lines shown in red */
         init_pair(CPAIR_GIT_OLD_LINE, COLOR_RED, -1);
+
+        /* Blame annotations: dim cyan on default background */
+        init_pair(CPAIR_BLAME, COLOR_CYAN, -1);
     }
 }
 
@@ -732,7 +735,8 @@ static void draw_git_marker(const GitState *gs, int buf_row)
  * `text_cols`  — number of columns available for text content.
  * `show_ws`    — whether to render spaces as visible dots.
  */
-static void draw_phantom_line(const char *old_line, int text_cols, int show_ws)
+static void draw_phantom_line(const char *old_line, int text_cols,
+                              int show_ws, int blame_w)
 {
     /*
      * Gutter: "  -  " — 5 chars (GUTTER_WIDTH).
@@ -741,6 +745,10 @@ static void draw_phantom_line(const char *old_line, int text_cols, int show_ws)
      */
     attron(COLOR_PAIR(CPAIR_GIT_OLD_LINE));
     printw("  -  ");
+
+    /* Blank space for the blame column (if blame is active) */
+    if (blame_w > 0)
+        printw("%*s", blame_w, "");
 
     /* Draw the old line text, truncated to the visible text width */
     if (old_line) {
@@ -755,6 +763,43 @@ static void draw_phantom_line(const char *old_line, int text_cols, int show_ws)
     }
     clrtoeol();
     attroff(COLOR_PAIR(CPAIR_GIT_OLD_LINE));
+}
+
+/*
+ * draw_blame_annotation — render the blame column for one buffer line.
+ *
+ * Draws a BLAME_WIDTH-column annotation showing "author    YYYY-MM-DD|"
+ * in dim cyan.  When blame data is unavailable for a line (past EOF or
+ * no data), draws blank spaces to keep columns aligned.
+ *
+ * `bd`      — blame data for the current buffer (may be NULL).
+ * `buf_row` — 0-based buffer line index.
+ */
+static void draw_blame_annotation(const GitBlameData *bd, int buf_row)
+{
+    attron(COLOR_PAIR(CPAIR_BLAME));
+
+    if (bd && bd->lines && buf_row >= 0 && buf_row < bd->count) {
+        const GitBlameLine *bl = &bd->lines[buf_row];
+
+        /*
+         * Format: "%-10.10s %10s|"
+         * Author name: left-aligned, truncated to 10 chars.
+         * Date:        right-aligned, 10 chars ("YYYY-MM-DD" or spaces).
+         * Separator:   '|' as visual boundary before text area.
+         * Total:       10 + 1 + 10 + 1 + 1 = 23 = BLAME_WIDTH.
+         */
+        char buf[BLAME_WIDTH + 1];
+        snprintf(buf, sizeof(buf), "%-10.10s %10s|",
+                 bl->author[0] ? bl->author : "",
+                 bl->date[0]   ? bl->date   : "");
+        printw("%s", buf);
+    } else {
+        /* No data for this row — blank padding */
+        printw("%*s", BLAME_WIDTH, "");
+    }
+
+    attroff(COLOR_PAIR(CPAIR_BLAME));
 }
 
 /*
@@ -902,8 +947,9 @@ static void draw_editor_area(struct Editor *ed)
      * git_panel_w — width consumed by the git status panel on the right side.
      */
     int git_panel_w = (ed->show_git_panel && ed->git_status) ? GIT_PANEL_WIDTH : 0;
+    int blame_w     = ed->show_git_blame ? BLAME_WIDTH : 0;
 
-    int text_cols = ed->term_cols - GUTTER_WIDTH - panel_w - git_panel_w;
+    int text_cols = ed->term_cols - GUTTER_WIDTH - panel_w - git_panel_w - blame_w;
 
     /*
      * Bracket match — find the bracket that pairs with the one under the
@@ -1012,7 +1058,7 @@ static void draw_editor_area(struct Editor *ed)
                                     && screen_row < text_rows; j++) {
                         move(TAB_BAR_HEIGHT + screen_row, panel_w);
                         draw_phantom_line(c->old_lines[j], text_cols,
-                                          ed->show_whitespace);
+                                          ed->show_whitespace, blame_w);
                         screen_row++;
                     }
                     chunk_idx_wr++;
@@ -1033,6 +1079,8 @@ static void draw_editor_area(struct Editor *ed)
                 attron(COLOR_PAIR(CPAIR_GUTTER));
                 printw("  ~  ");
                 attroff(COLOR_PAIR(CPAIR_GUTTER));
+                if (blame_w > 0)
+                    printw("%*s", blame_w, "");
                 clrtoeol();
                 screen_row++;
                 continue;
@@ -1108,6 +1156,14 @@ static void draw_editor_area(struct Editor *ed)
                     printw("     ");
                     attroff(COLOR_PAIR(CPAIR_GUTTER));
                 }
+            }
+
+            /* ---- Blame annotation column (word-wrap path) ---- */
+            if (ed->show_git_blame) {
+                if (segment == 0)
+                    draw_blame_annotation(&ed->git_blame, buf_row);
+                else
+                    printw("%*s", BLAME_WIDTH, "");  /* blank for continuation */
             }
 
             /* ---- Compute the visible slice of this segment ---- */
@@ -1296,7 +1352,7 @@ static void draw_editor_area(struct Editor *ed)
                     for (int j = 0; j < c->old_count && screen_row < text_rows; j++) {
                         move(TAB_BAR_HEIGHT + screen_row, panel_w);
                         draw_phantom_line(c->old_lines[j], text_cols,
-                                          ed->show_whitespace);
+                                          ed->show_whitespace, blame_w);
                         screen_row++;
                     }
                     chunk_idx++;
@@ -1319,6 +1375,8 @@ static void draw_editor_area(struct Editor *ed)
                 attron(COLOR_PAIR(CPAIR_GUTTER));
                 printw("  ~  ");
                 attroff(COLOR_PAIR(CPAIR_GUTTER));
+                if (blame_w > 0)
+                    printw("%*s", blame_w, "");
                 clrtoeol();
                 screen_row++;
                 buf_row++;
@@ -1374,6 +1432,10 @@ static void draw_editor_area(struct Editor *ed)
                 if (is_cursor_row) attroff(A_BOLD);
                 attroff(COLOR_PAIR(CPAIR_GUTTER));
             }
+
+            /* ---- Blame annotation column (no-wrap path) ---- */
+            if (ed->show_git_blame)
+                draw_blame_annotation(&ed->git_blame, buf_row);
 
             /* ---- Compute what portion of this row (if any) is selected ------- */
 
@@ -1672,7 +1734,9 @@ void display_render(struct Editor *ed)
          * text_cols_wr must account for the panel width so wrapping matches
          * what draw_editor_area actually rendered.
          */
-        int text_cols_wr = ed->term_cols - GUTTER_WIDTH - panel_w;
+        int blame_w_wr   = ed->show_git_blame ? BLAME_WIDTH : 0;
+        int git_pw_wr    = (ed->show_git_panel && ed->git_status) ? GIT_PANEL_WIDTH : 0;
+        int text_cols_wr = ed->term_cols - GUTTER_WIDTH - panel_w - blame_w_wr - git_pw_wr;
         if (text_cols_wr <= 0) text_cols_wr = 1;
 
         /* Count screen rows consumed by lines before cursor_row */
@@ -1688,7 +1752,7 @@ void display_render(struct Editor *ed)
         sr += ed->cursor_col / text_cols_wr;
 
         screen_row = TAB_BAR_HEIGHT + sr;
-        screen_col = panel_w + GUTTER_WIDTH + (ed->cursor_col % text_cols_wr);
+        screen_col = panel_w + GUTTER_WIDTH + blame_w_wr + (ed->cursor_col % text_cols_wr);
 
         /*
          * Adjust for region border rows that consume screen space.
@@ -1715,7 +1779,9 @@ void display_render(struct Editor *ed)
          * Case B (normal mode): straightforward linear mapping.
          * Add panel_w so the cursor lands in the editor area, not in the panel.
          */
-        screen_col = panel_w + GUTTER_WIDTH + (ed->cursor_col - ed->view_col);
+        {
+        int blame_w_nm = ed->show_git_blame ? BLAME_WIDTH : 0;
+        screen_col = panel_w + GUTTER_WIDTH + blame_w_nm + (ed->cursor_col - ed->view_col);
         screen_row = TAB_BAR_HEIGHT + (ed->cursor_row - ed->view_row);
 
         /* Adjust for region border rows (same logic as word-wrap case) */
@@ -1742,14 +1808,16 @@ void display_render(struct Editor *ed)
                 &ed->inline_diff,
                 ed->view_row, ed->cursor_row + 1);
         }
+        }  /* end of blame_w_nm block */
     }
 
     /* Clamp to prevent the cursor from escaping the text area */
     int text_area_top    = TAB_BAR_HEIGHT;
     int text_area_bottom = ed->term_rows - 2;   /* one above the status bar */
+    int blame_w_clamp    = ed->show_git_blame ? BLAME_WIDTH : 0;
     int min_col          = (ed->filetree_focus && ed->show_filetree && ed->filetree)
                            ? 0
-                           : panel_w + GUTTER_WIDTH;
+                           : panel_w + GUTTER_WIDTH + blame_w_clamp;
 
     if (screen_row < text_area_top)    screen_row = text_area_top;
     if (screen_row > text_area_bottom) screen_row = text_area_bottom;

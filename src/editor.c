@@ -24,9 +24,10 @@
  * Internal helpers
  * ============================================================================ */
 
-/* Forward declaration — defined further down, but called from editor_save and
+/* Forward declarations — defined further down, but called from editor_save and
  * buffer-switching functions which are earlier in the file. */
 static void refresh_inline_diff(Editor *ed);
+static void refresh_git_blame(Editor *ed);
 
 /*
  * clamp — return `value` clamped to the range [lo, hi].
@@ -184,7 +185,8 @@ static int editor_cols(const Editor *ed)
      */
     int panel_w     = (ed->show_filetree && ed->filetree) ? FILETREE_WIDTH : 0;
     int git_panel_w = (ed->show_git_panel && ed->git_status) ? GIT_PANEL_WIDTH : 0;
-    return ed->term_cols - GUTTER_WIDTH - panel_w - git_panel_w;
+    int blame_w     = ed->show_git_blame ? BLAME_WIDTH : 0;
+    return ed->term_cols - GUTTER_WIDTH - panel_w - git_panel_w - blame_w;
 }
 
 /* ============================================================================
@@ -238,6 +240,9 @@ void editor_cleanup(Editor *ed)
 
     /* Free inline diff chunks */
     git_diff_chunks_free(&ed->inline_diff);
+
+    /* Free blame data */
+    git_blame_free(&ed->git_blame);
 }
 
 /* ============================================================================
@@ -424,6 +429,8 @@ void editor_next_buffer(Editor *ed)
     /* Refresh inline diff for the new buffer if the view is active */
     if (ed->show_inline_diff)
         refresh_inline_diff(ed);
+    if (ed->show_git_blame)
+        refresh_git_blame(ed);
 }
 
 void editor_prev_buffer(Editor *ed)
@@ -442,6 +449,8 @@ void editor_prev_buffer(Editor *ed)
     /* Refresh inline diff for the new buffer if the view is active */
     if (ed->show_inline_diff)
         refresh_inline_diff(ed);
+    if (ed->show_git_blame)
+        refresh_git_blame(ed);
 }
 
 void editor_close_buffer(Editor *ed)
@@ -1979,6 +1988,63 @@ void editor_toggle_git_panel(Editor *ed)
             git_status_refresh(ed->git_status, buf->git_state.repo_root);
 
         ed->git_panel_focus = 1;
+    }
+}
+
+/* ============================================================================
+ * Git blame view
+ * ============================================================================ */
+
+/*
+ * refresh_git_blame — re-fetch blame data for the current buffer.
+ *
+ * Called when blame is toggled on, and when switching buffers while
+ * blame is active.
+ */
+static void refresh_git_blame(Editor *ed)
+{
+    git_blame_free(&ed->git_blame);
+
+    if (!ed->show_git_blame) return;
+
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf || !buf->git_state.repo_root || !buf->filename)
+        return;
+
+    git_blame_refresh(&ed->git_blame, buf->git_state.repo_root,
+                      buf->filename, buf->num_lines);
+}
+
+void editor_toggle_git_blame(Editor *ed)
+{
+    if (!ed->show_git_blame) {
+        /* Toggle ON */
+        Buffer *buf = editor_current_buffer(ed);
+        if (!buf || !buf->git_state.repo_root) {
+            editor_set_status(ed, "Not in a git repository.");
+            return;
+        }
+        if (!buf->git_state.is_tracked) {
+            editor_set_status(ed, "File is not tracked by git.");
+            return;
+        }
+        if (!buf->filename) {
+            editor_set_status(ed, "Buffer has no filename.");
+            return;
+        }
+
+        ed->show_git_blame = 1;
+        refresh_git_blame(ed);
+
+        editor_set_status(ed, "Blame ON (Shift+F9 to toggle off).");
+        editor_scroll(ed);  /* text area narrowed */
+
+    } else {
+        /* Toggle OFF */
+        ed->show_git_blame = 0;
+        git_blame_free(&ed->git_blame);
+        editor_set_status(ed, "Blame OFF.");
+        editor_scroll(ed);  /* text area widened */
     }
 }
 
