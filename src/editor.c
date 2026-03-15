@@ -178,8 +178,9 @@ static int editor_cols(const Editor *ed)
      * (ed->filetree != NULL).  We guard on both conditions to avoid
      * using FILETREE_WIDTH before the panel has been created.
      */
-    int panel_w = (ed->show_filetree && ed->filetree) ? FILETREE_WIDTH : 0;
-    return ed->term_cols - GUTTER_WIDTH - panel_w;
+    int panel_w     = (ed->show_filetree && ed->filetree) ? FILETREE_WIDTH : 0;
+    int git_panel_w = (ed->show_git_panel && ed->git_status) ? GIT_PANEL_WIDTH : 0;
+    return ed->term_cols - GUTTER_WIDTH - panel_w - git_panel_w;
 }
 
 /* ============================================================================
@@ -222,6 +223,13 @@ void editor_cleanup(Editor *ed)
     if (ed->filetree) {
         filetree_free(ed->filetree);
         ed->filetree = NULL;
+    }
+
+    /* Free the git status list if it was ever created */
+    if (ed->git_status) {
+        git_status_free(ed->git_status);
+        free(ed->git_status);
+        ed->git_status = NULL;
     }
 }
 
@@ -1886,6 +1894,72 @@ void editor_mark_region(Editor *ed)
     } else {
         editor_set_status(ed,
             "Select rows with Shift+Arrow, then Ctrl+U to mark a region.");
+    }
+}
+
+/* ============================================================================
+ * Git status panel
+ * ============================================================================ */
+
+void editor_toggle_git_panel(Editor *ed)
+{
+    if (!ed->show_git_panel) {
+        /*
+         * Panel is hidden → show it.
+         * Find the repo root from the current buffer's git state.
+         * If the file isn't in a repo, show an error and bail.
+         */
+        Buffer *buf = editor_current_buffer(ed);
+        const char *root = NULL;
+        if (buf)
+            root = buf->git_state.repo_root;
+
+        if (!root || root[0] == '\0') {
+            editor_set_status(ed, "Not in a git repository.");
+            return;
+        }
+
+        /* Allocate the status list on first use */
+        if (!ed->git_status) {
+            ed->git_status = malloc(sizeof(GitStatusList));
+            if (!ed->git_status) {
+                editor_set_status(ed, "Error: out of memory");
+                return;
+            }
+            memset(ed->git_status, 0, sizeof(GitStatusList));
+        }
+
+        /* Refresh the status list */
+        git_status_refresh(ed->git_status, root);
+
+        ed->show_git_panel = 1;
+        ed->git_panel_focus = 1;
+        ed->git_panel_cursor = 0;
+        ed->git_panel_scroll = 0;
+
+        if (ed->git_status->count == 0)
+            editor_set_status(ed, "Working tree clean — no changes.");
+        else
+            editor_set_status(ed, "%d changed file(s). Esc to return to editor.",
+                              ed->git_status->count);
+
+    } else if (ed->git_panel_focus) {
+        /*
+         * Panel is visible and has focus → return focus to editor.
+         * The panel stays visible.
+         */
+        ed->git_panel_focus = 0;
+
+    } else {
+        /*
+         * Panel is visible but editor has focus → give focus back to panel
+         * and refresh the status.
+         */
+        Buffer *buf = editor_current_buffer(ed);
+        if (buf && buf->git_state.repo_root)
+            git_status_refresh(ed->git_status, buf->git_state.repo_root);
+
+        ed->git_panel_focus = 1;
     }
 }
 

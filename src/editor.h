@@ -219,6 +219,26 @@ typedef struct Editor {
      */
     int      region_start_row;
     int      region_end_row;
+
+    /* ---- Git status panel ------------------------------------------------- */
+
+    /*
+     * git_status — heap-allocated list of changed files from `git status`.
+     * NULL until the panel is first opened.  Freed in editor_cleanup().
+     */
+    GitStatusList *git_status;
+
+    /** show_git_panel — non-zero when the git status panel is visible. */
+    int      show_git_panel;
+
+    /** git_panel_focus — non-zero when keyboard input goes to the git panel. */
+    int      git_panel_focus;
+
+    /** git_panel_cursor — index into git_status->entries[] of highlighted row. */
+    int      git_panel_cursor;
+
+    /** git_panel_scroll — first visible entry in the git panel. */
+    int      git_panel_scroll;
 } Editor;
 
 /* ---- Lifecycle ------------------------------------------------------------ */
@@ -542,6 +562,17 @@ void editor_toggle_filetree(Editor *ed);
  *   - If neither: shows a help message in the status bar.
  */
 void editor_mark_region(Editor *ed);
+
+/* ---- Git status panel ---------------------------------------------------- */
+
+/**
+ * editor_toggle_git_panel — show or hide the git status panel (F9).
+ *
+ * If hidden: shows the panel, refreshes git status, gives it focus.
+ * If visible and focused: returns focus to the editor (panel stays visible).
+ * If visible and unfocused: gives the panel focus.
+ */
+void editor_toggle_git_panel(Editor *ed);
 
 /* ---- Misc ----------------------------------------------------------------- */
 

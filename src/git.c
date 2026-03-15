@@ -419,3 +419,77 @@ int git_refresh(GitState *gs, const char *filepath, int total_lines)
 
     return result;
 }
+
+/* ============================================================================
+ * Git status list — for the status panel
+ * ============================================================================ */
+
+void git_status_free(GitStatusList *list)
+{
+    if (list) {
+        list->count = 0;
+        list->repo_root[0] = '\0';
+    }
+}
+
+int git_status_refresh(GitStatusList *list, const char *repo_root)
+{
+    if (!list || !repo_root || repo_root[0] == '\0') return -1;
+
+    list->count = 0;
+    strncpy(list->repo_root, repo_root, sizeof(list->repo_root) - 1);
+    list->repo_root[sizeof(list->repo_root) - 1] = '\0';
+
+    /*
+     * Run `git status --porcelain=v1` which produces machine-readable output.
+     *
+     * Each line is in the format:  "XY filename"
+     *   X = index (staging area) status
+     *   Y = working tree status
+     *   Positions 0-1 are XY, position 2 is a space, position 3+ is the path.
+     *
+     * The porcelain format is guaranteed not to change across git versions,
+     * making it safe to parse programmatically.
+     */
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd),
+             "git -C '%s' status --porcelain=v1 2>/dev/null", repo_root);
+
+    char *output = run_command(cmd);
+    if (!output) return -1;
+
+    /*
+     * Parse line by line.  Each line is at least 4 characters:
+     *   "XY filename\n"
+     *    ^^            — index and working tree status
+     *      ^           — space separator
+     *       ^^^^^^^^^  — relative file path
+     */
+    const char *p = output;
+    while (*p && list->count < GIT_STATUS_MAX) {
+        /* Need at least "XY " (3 chars) + at least 1 char for filename */
+        const char *eol = strchr(p, '\n');
+        int line_len = eol ? (int)(eol - p) : (int)strlen(p);
+
+        if (line_len >= 4) {
+            GitStatusEntry *e = &list->entries[list->count];
+            e->index_status = p[0];
+            e->work_status  = p[1];
+
+            /* Copy the path (starts at position 3) */
+            int path_len = line_len - 3;
+            if (path_len >= (int)sizeof(e->path))
+                path_len = (int)sizeof(e->path) - 1;
+            memcpy(e->path, p + 3, path_len);
+            e->path[path_len] = '\0';
+
+            list->count++;
+        }
+
+        p += line_len;
+        if (*p == '\n') p++;
+    }
+
+    free(output);
+    return 0;
+}

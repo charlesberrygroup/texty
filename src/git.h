@@ -128,4 +128,50 @@ int git_refresh(GitState *gs, const char *filepath, int total_lines);
  */
 int git_parse_diff_output(GitState *gs, const char *diff_text, int total_lines);
 
+/* ---- Git status list (for the status panel) ------------------------------- */
+
+/** Maximum number of entries in a git status listing. */
+#define GIT_STATUS_MAX 512
+
+/*
+ * GitStatusEntry — one file from `git status --porcelain=v1`.
+ *
+ * The porcelain format produces lines like "XY path" where:
+ *   X = status in the staging area (index)
+ *   Y = status in the working tree
+ *
+ * For display we combine these into a single user-facing status character.
+ */
+typedef struct {
+    char path[1024];        /* relative path from repo root */
+    char index_status;      /* staging area: ' ', M, A, D, R, ? */
+    char work_status;       /* working tree: ' ', M, A, D, ? */
+} GitStatusEntry;
+
+/*
+ * GitStatusList — result of `git status` for a repository.
+ *
+ * Populated by git_status_refresh().  Freed by git_status_free().
+ */
+typedef struct {
+    GitStatusEntry entries[GIT_STATUS_MAX];
+    int            count;
+    char           repo_root[1024];   /* cached repo root path */
+} GitStatusList;
+
+/**
+ * git_status_refresh — run `git status --porcelain=v1` and populate the list.
+ *
+ * `repo_root` is the path to the git repo root (from GitState.repo_root).
+ * Returns 0 on success, -1 on error.
+ */
+int git_status_refresh(GitStatusList *list, const char *repo_root);
+
+/**
+ * git_status_free — reset a GitStatusList to empty.
+ *
+ * Safe to call on an already-empty list.
+ */
+void git_status_free(GitStatusList *list);
+
 #endif /* GIT_H */

@@ -107,6 +107,14 @@ struct Editor;
 #define CPAIR_GIT_MODIFIED 23   /* Yellow — line content changed            */
 #define CPAIR_GIT_DELETED  24   /* Red    — line(s) deleted after this line */
 
+/* ---- Git status panel ----------------------------------------------------- */
+
+/** GIT_PANEL_WIDTH — total column width of the git status panel (right side). */
+#define GIT_PANEL_WIDTH    30
+
+/** CPAIR_GIT_PANEL_CURSOR — highlighted entry in the git panel (black on white). */
+#define CPAIR_GIT_PANEL_CURSOR 25
+
 /* ---- Functions ------------------------------------------------------------ */
 
 /**

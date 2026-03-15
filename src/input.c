@@ -365,6 +365,60 @@ static void try_quit(struct Editor *ed)
 }
 
 /* ============================================================================
+ * Git status panel key handler
+ * ============================================================================ */
+
+/*
+ * input_process_git_panel_key — handle one keypress while the git panel has focus.
+ *
+ * Up/Down navigate entries, Enter opens the file, Escape returns focus
+ * to the editor, Ctrl+W closes the panel.
+ */
+static void input_process_git_panel_key(struct Editor *ed, int key)
+{
+    GitStatusList *gs = ed->git_status;
+    if (!gs) return;
+
+    switch (key) {
+    case KEY_UP:
+        if (ed->git_panel_cursor > 0)
+            ed->git_panel_cursor--;
+        break;
+
+    case KEY_DOWN:
+        if (ed->git_panel_cursor < gs->count - 1)
+            ed->git_panel_cursor++;
+        break;
+
+    case '\n':   /* Enter — open the file under the cursor */
+    case KEY_ENTER:
+        if (ed->git_panel_cursor >= 0 && ed->git_panel_cursor < gs->count) {
+            /*
+             * Build the full path by combining repo root + relative path.
+             * git status --porcelain gives paths relative to the repo root.
+             */
+            GitStatusEntry *e = &gs->entries[ed->git_panel_cursor];
+            char fullpath[2048];
+            snprintf(fullpath, sizeof(fullpath), "%s/%s",
+                     gs->repo_root, e->path);
+
+            editor_open_or_switch(ed, fullpath);
+            ed->git_panel_focus = 0;  /* return focus to editor */
+        }
+        break;
+
+    case 27:     /* Escape — return focus to editor */
+        ed->git_panel_focus = 0;
+        break;
+
+    case CTRL('w'):   /* Ctrl+W — close the panel */
+        ed->show_git_panel  = 0;
+        ed->git_panel_focus = 0;
+        break;
+    }
+}
+
+/* ============================================================================
  * input_process_key
  * ============================================================================ */
 
@@ -407,6 +461,16 @@ void input_process_key(struct Editor *ed)
             && ed->show_filetree && ed->filetree) {
         input_process_filetree_key(ed, key);
         return;  /* Do NOT fall through to the editor key handler */
+    }
+
+    /*
+     * Git panel focus routing — same pattern as the file tree.
+     * F9 always reaches the main handler (so the panel can be toggled off).
+     */
+    if (key != KEY_F(9) && ed->git_panel_focus
+            && ed->show_git_panel && ed->git_status) {
+        input_process_git_panel_key(ed, key);
+        return;
     }
 
     switch (key) {
@@ -651,6 +715,10 @@ void input_process_key(struct Editor *ed)
 
         case CTRL('u'):        /* Ctrl+U — Mark/clear region highlight */
             editor_mark_region(ed);
+            break;
+
+        case KEY_F(9):         /* F9 — Toggle git status panel */
+            editor_toggle_git_panel(ed);
             break;
 
         case CTRL('b'):        /* Ctrl+B — Toggle file explorer panel */

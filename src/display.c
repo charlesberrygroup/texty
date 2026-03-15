@@ -162,6 +162,9 @@ void display_init(void)
         init_pair(CPAIR_GIT_ADDED,    COLOR_GREEN,  -1);
         init_pair(CPAIR_GIT_MODIFIED, COLOR_YELLOW, -1);
         init_pair(CPAIR_GIT_DELETED,  COLOR_RED,    -1);
+
+        /* Git status panel */
+        init_pair(CPAIR_GIT_PANEL_CURSOR, COLOR_BLACK, COLOR_WHITE);
     }
 }
 
@@ -715,6 +718,98 @@ static void draw_git_marker(const GitState *gs, int buf_row)
     }
 }
 
+/*
+ * draw_git_panel — render the git status panel on the right side of the screen.
+ *
+ * Layout (mirrors the file explorer panel pattern):
+ *   Row TAB_BAR_HEIGHT       : header (" Git Status")
+ *   Row TAB_BAR_HEIGHT+1 ... : status entries (one per row)
+ *   Each row starts with '|' at the panel's left edge as a border separator.
+ *
+ * Each entry shows: "XY filename" where XY is the git status code.
+ * Colors: M=yellow, A=green, D=red, ?=default (untracked).
+ */
+static void draw_git_panel(struct Editor *ed)
+{
+    GitStatusList *gs = ed->git_status;
+    if (!gs) return;
+
+    int panel_x    = ed->term_cols - GIT_PANEL_WIDTH;
+    int panel_rows = ed->term_rows - TAB_BAR_HEIGHT - 1;
+    int entry_rows = panel_rows - 1;  /* one row for header */
+
+    /* Scroll adjustment — keep cursor visible */
+    if (ed->git_panel_cursor < ed->git_panel_scroll)
+        ed->git_panel_scroll = ed->git_panel_cursor;
+    if (ed->git_panel_cursor >= ed->git_panel_scroll + entry_rows)
+        ed->git_panel_scroll = ed->git_panel_cursor - entry_rows + 1;
+    if (ed->git_panel_scroll < 0)
+        ed->git_panel_scroll = 0;
+
+    /* ---- Header row ---- */
+    move(TAB_BAR_HEIGHT, panel_x);
+    addch('|');
+    attron(A_BOLD);
+    printw("%-*s", GIT_PANEL_WIDTH - 1, " Git Status");
+    attroff(A_BOLD);
+
+    /* ---- Entry rows ---- */
+    for (int r = 0; r < entry_rows; r++) {
+        int screen_row = TAB_BAR_HEIGHT + 1 + r;
+        int idx        = ed->git_panel_scroll + r;
+
+        move(screen_row, panel_x);
+        addch('|');  /* left border */
+
+        if (idx >= gs->count) {
+            /* Past last entry — blank row */
+            printw("%-*s", GIT_PANEL_WIDTH - 1, "");
+            continue;
+        }
+
+        GitStatusEntry *e         = &gs->entries[idx];
+        int             is_cursor = (idx == ed->git_panel_cursor);
+
+        /*
+         * Build the display line: " XY filename"
+         * X = index status, Y = working tree status.
+         * Name is truncated to fit the panel width.
+         */
+        int name_width = GIT_PANEL_WIDTH - 5;  /* -1 border -3 " XY" -1 space */
+        if (name_width < 1) name_width = 1;
+
+        char line_buf[GIT_PANEL_WIDTH + 1];
+        snprintf(line_buf, sizeof(line_buf), " %c%c %-*.*s",
+                 e->index_status, e->work_status,
+                 name_width, name_width, e->path);
+
+        /*
+         * Choose color based on the most significant status.
+         * Priority: cursor highlight > modified > added > deleted > untracked.
+         */
+        if (is_cursor && ed->git_panel_focus) {
+            attron(COLOR_PAIR(CPAIR_GIT_PANEL_CURSOR) | A_BOLD);
+            printw("%-*s", GIT_PANEL_WIDTH - 1, line_buf);
+            attroff(COLOR_PAIR(CPAIR_GIT_PANEL_CURSOR) | A_BOLD);
+        } else if (is_cursor) {
+            attron(A_BOLD);
+            printw("%-*s", GIT_PANEL_WIDTH - 1, line_buf);
+            attroff(A_BOLD);
+        } else {
+            /* Color by status: pick the more interesting of index/work */
+            char st = (e->work_status != ' ') ? e->work_status : e->index_status;
+            int cpair = 0;
+            if (st == 'M') cpair = CPAIR_GIT_MODIFIED;
+            else if (st == 'A') cpair = CPAIR_GIT_ADDED;
+            else if (st == 'D') cpair = CPAIR_GIT_DELETED;
+
+            if (cpair) attron(COLOR_PAIR(cpair));
+            printw("%-*s", GIT_PANEL_WIDTH - 1, line_buf);
+            if (cpair) attroff(COLOR_PAIR(cpair));
+        }
+    }
+}
+
 static void draw_editor_area(struct Editor *ed)
 {
     Buffer *buf = editor_current_buffer(ed);
@@ -764,7 +859,12 @@ static void draw_editor_area(struct Editor *ed)
      * We subtract the gutter width (line numbers) and the file-tree panel
      * width (when visible) from the total terminal width.
      */
-    int text_cols = ed->term_cols - GUTTER_WIDTH - panel_w;
+    /*
+     * git_panel_w — width consumed by the git status panel on the right side.
+     */
+    int git_panel_w = (ed->show_git_panel && ed->git_status) ? GIT_PANEL_WIDTH : 0;
+
+    int text_cols = ed->term_cols - GUTTER_WIDTH - panel_w - git_panel_w;
 
     /*
      * Bracket match — find the bracket that pairs with the one under the
@@ -1421,6 +1521,10 @@ void display_render(struct Editor *ed)
         draw_filetree_panel(ed);
 
     draw_editor_area(ed);
+
+    if (ed->show_git_panel && ed->git_status)
+        draw_git_panel(ed);
+
     draw_status_bar(ed);
 
     /*
