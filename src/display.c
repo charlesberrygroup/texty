@@ -1422,6 +1422,19 @@ void display_render(struct Editor *ed)
         screen_row = TAB_BAR_HEIGHT + sr;
         screen_col = panel_w + GUTTER_WIDTH + (ed->cursor_col % text_cols_wr);
 
+        /*
+         * Adjust for region border rows that consume screen space.
+         * The top border is drawn before region_start_row, so if the
+         * cursor is at or past that row, shift down by 1.  Similarly
+         * the bottom border is drawn after region_end_row.
+         */
+        if (ed->region_active) {
+            if (ed->cursor_row >= ed->region_start_row)
+                screen_row++;          /* top border pushed us down */
+            if (ed->cursor_row > ed->region_end_row)
+                screen_row++;          /* bottom border pushed us down */
+        }
+
     } else {
         /*
          * Case B (normal mode): straightforward linear mapping.
@@ -1429,6 +1442,14 @@ void display_render(struct Editor *ed)
          */
         screen_col = panel_w + GUTTER_WIDTH + (ed->cursor_col - ed->view_col);
         screen_row = TAB_BAR_HEIGHT + (ed->cursor_row - ed->view_row);
+
+        /* Adjust for region border rows (same logic as word-wrap case) */
+        if (ed->region_active) {
+            if (ed->cursor_row >= ed->region_start_row)
+                screen_row++;
+            if (ed->cursor_row > ed->region_end_row)
+                screen_row++;
+        }
     }
 
     /* Clamp to prevent the cursor from escaping the text area */
