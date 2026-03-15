@@ -27,8 +27,15 @@ OBJDIR  = obj
 #   -std=c99        : use the C99 standard
 #   -g              : include debug symbols (needed for gdb/lldb)
 #   -Isrc           : look in src/ for #include "..." headers
+#   -D_POSIX_C_SOURCE=200809L : expose POSIX.1-2008 functions (strdup, etc.)
+#       strdup() is not in the C99 standard, so GCC on Linux hides it from
+#       <string.h> in strict C99 mode.  Without this define, the compiler
+#       assumes strdup returns int (32 bits), which truncates the 64-bit
+#       pointer and silently corrupts the undo stack at runtime.  macOS
+#       always exposes strdup regardless of the C standard flag, which is
+#       why this bug only appeared on Linux.
 # --------------------------------------------------------------------------
-CFLAGS  = -Wall -Wextra -std=c99 -g -Isrc
+CFLAGS  = -Wall -Wextra -std=c99 -g -Isrc -D_POSIX_C_SOURCE=200809L
 
 # --------------------------------------------------------------------------
 # Platform detection — link the right ncurses library
