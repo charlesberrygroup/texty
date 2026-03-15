@@ -332,6 +332,30 @@ int editor_open_file(Editor *ed, const char *path)
     return 0;
 }
 
+int editor_open_or_switch(Editor *ed, const char *path)
+{
+    /*
+     * Scan all open buffers for one whose filename matches `path`.
+     * strcmp() returns 0 when the strings are equal.
+     * We check buf->filename for NULL first (unsaved buffers have no name).
+     */
+    for (int i = 0; i < ed->num_buffers; i++) {
+        Buffer *buf = ed->buffers[i];
+        if (buf && buf->filename && strcmp(buf->filename, path) == 0) {
+            /* File is already open — switch to it */
+            save_cursor_to_buffer(ed);
+            ed->current_buffer = i;
+            restore_cursor_from_buffer(ed);
+            editor_selection_clear(ed);
+            editor_set_status(ed, "Switched to existing buffer");
+            return 0;
+        }
+    }
+
+    /* Not already open — open it in a new buffer */
+    return editor_open_file(ed, path);
+}
+
 int editor_save(Editor *ed)
 {
     Buffer *buf = editor_current_buffer(ed);

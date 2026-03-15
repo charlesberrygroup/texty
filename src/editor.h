@@ -228,6 +228,17 @@ int editor_new_buffer(Editor *ed);
 int editor_open_file(Editor *ed, const char *path);
 
 /**
+ * editor_open_or_switch — switch to an existing buffer for `path`, or open it.
+ *
+ * If any open buffer already has the same filename as `path`, that buffer is
+ * made current (no new buffer is created).  Otherwise behaves like
+ * editor_open_file().
+ *
+ * Returns 0 on success, -1 on error.
+ */
+int editor_open_or_switch(Editor *ed, const char *path);
+
+/**
  * editor_save — save the current buffer to disk.
  *
  * Returns 0 on success, -1 on error.

@@ -127,16 +127,22 @@ static void input_process_filetree_key(struct Editor *ed, int key)
                      * Enter on a file: open it in a new editor buffer and
                      * return focus to the editor.
                      */
-                    editor_open_file(ed, e->path);
+                    editor_open_or_switch(ed, e->path);
                     ed->filetree_focus = 0;
                 }
             }
             break;
 
-        /* ---- Return focus to editor -------------------------------------- */
+        /* ---- Return focus to editor / close panel ------------------------ */
 
-        case 27:   /* Escape */
+        case 27:           /* Escape — return focus to editor, keep panel open */
             ed->filetree_focus = 0;
+            break;
+
+        case CTRL('w'):    /* Ctrl+W — close the file explorer panel entirely */
+            ed->show_filetree  = 0;
+            ed->filetree_focus = 0;
+            editor_scroll(ed);
             break;
 
         /* ---- File operations --------------------------------------------- */
