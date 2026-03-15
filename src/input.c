@@ -653,6 +653,14 @@ void input_process_key(struct Editor *ed)
             editor_mark_region(ed);
             break;
 
+        case KEY_F(6):         /* F6 — Split pane horizontally (top/bottom) */
+            editor_split_horizontal(ed);
+            break;
+
+        case KEY_F(7):         /* F7 — Split pane vertically (left/right) */
+            editor_split_vertical(ed);
+            break;
+
         case CTRL('b'):        /* Ctrl+B — Toggle file explorer panel */
             /*
              * editor_toggle_filetree() handles all the logic:

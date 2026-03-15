@@ -478,6 +478,24 @@ void editor_toggle_filetree(Editor *ed);
  */
 void editor_mark_region(Editor *ed);
 
+/* ---- Split panes --------------------------------------------------------- */
+
+/**
+ * editor_split_horizontal — split the active pane top/bottom (F6).
+ *
+ * Creates a new pane below the active pane, both showing the same buffer.
+ * The new pane becomes the active pane.
+ */
+void editor_split_horizontal(Editor *ed);
+
+/**
+ * editor_split_vertical — split the active pane left/right (F7).
+ *
+ * Creates a new pane to the right of the active pane, both showing the
+ * same buffer.  The new pane becomes the active pane.
+ */
+void editor_split_vertical(Editor *ed);
+
 /* ---- Misc ----------------------------------------------------------------- */
 
 /**

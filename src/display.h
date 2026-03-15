@@ -102,6 +102,9 @@ struct Editor;
 /** CPAIR_REGION — red foreground used for the region box border (Ctrl+U). */
 #define CPAIR_REGION          21
 
+/** CPAIR_PANE_BORDER — separator lines between split panes. */
+#define CPAIR_PANE_BORDER     22
+
 /* ---- Functions ------------------------------------------------------------ */
 
 /**

@@ -152,31 +152,34 @@ static void insert_text_at(Buffer *buf, int row, int col,
 }
 
 /*
- * editor_rows — how many rows are available for text content.
+ * editor_rows — how many rows are available for text content in the active pane.
  *
- * We reserve 1 row at the bottom for the status bar and TAB_BAR_HEIGHT rows
- * at the top for the tab bar.
+ * With split panes, each pane has its own height.  The pane's height is set
+ * by pane_layout() and already accounts for the tab bar, status bar, and
+ * separator lines.
+ *
+ * Fallback: if the pane hasn't been laid out yet (height == 0), use the
+ * old full-screen calculation so the editor works during initialisation.
  */
 static int editor_rows(const Editor *ed)
 {
+    if (ed->active_pane && ed->active_pane->height > 0)
+        return ed->active_pane->height;
     return ed->term_rows - 1 - TAB_BAR_HEIGHT;
 }
 
 /*
- * editor_cols — how many columns are available for text content.
+ * editor_cols — how many columns are available for text content in the active pane.
  *
- * We subtract the gutter width (line numbers) from the total terminal width.
- * If the file tree panel is visible, we also subtract its width so the editor
- * area is correctly narrowed — preventing text from being drawn under the panel.
+ * With split panes, each pane has its own width.  We subtract the gutter
+ * from the pane's width (not the terminal width).
+ *
+ * Fallback: if the pane hasn't been laid out yet, use the old calculation.
  */
 static int editor_cols(const Editor *ed)
 {
-    /*
-     * panel_w is the width consumed by the file explorer panel.
-     * It is non-zero only when the panel is both shown AND initialised
-     * (ed->filetree != NULL).  We guard on both conditions to avoid
-     * using FILETREE_WIDTH before the panel has been created.
-     */
+    if (ed->active_pane && ed->active_pane->width > 0)
+        return ed->active_pane->width - GUTTER_WIDTH;
     int panel_w = (ed->show_filetree && ed->filetree) ? FILETREE_WIDTH : 0;
     return ed->term_cols - GUTTER_WIDTH - panel_w;
 }
@@ -1892,6 +1895,75 @@ void editor_mark_region(Editor *ed)
         editor_set_status(ed,
             "Select rows with Shift+Arrow, then Ctrl+U to mark a region.");
     }
+}
+
+/* ============================================================================
+ * Split panes
+ * ============================================================================ */
+
+/*
+ * recompute_pane_layout — recalculate all pane screen rectangles.
+ *
+ * Called after a split, close, or terminal resize so every leaf pane has
+ * correct x/y/width/height values that fit the current terminal.
+ */
+static void recompute_pane_layout(Editor *ed)
+{
+    int panel_w = (ed->show_filetree && ed->filetree) ? FILETREE_WIDTH : 0;
+    int area_x  = panel_w;
+    int area_y  = TAB_BAR_HEIGHT;
+    int area_w  = ed->term_cols - panel_w;
+    int area_h  = ed->term_rows - 1 - TAB_BAR_HEIGHT;  /* -1 for status bar */
+
+    pane_layout(ed->pane_root, area_x, area_y, area_w, area_h);
+}
+
+void editor_split_horizontal(Editor *ed)
+{
+    if (ed->num_panes >= PANE_MAX) {
+        editor_set_status(ed, "Maximum pane limit reached (%d)", PANE_MAX);
+        return;
+    }
+
+    Pane *new_pane = pane_split(ed->pane_root, ed->active_pane,
+                                SPLIT_HORIZONTAL);
+    if (!new_pane) {
+        editor_set_status(ed, "Error: could not split pane");
+        return;
+    }
+
+    ed->num_panes++;
+    recompute_pane_layout(ed);
+
+    /* Focus the new (bottom) pane */
+    ed->active_pane = new_pane;
+    editor_scroll(ed);
+
+    editor_set_status(ed, "Split horizontal  (F8 to close)");
+}
+
+void editor_split_vertical(Editor *ed)
+{
+    if (ed->num_panes >= PANE_MAX) {
+        editor_set_status(ed, "Maximum pane limit reached (%d)", PANE_MAX);
+        return;
+    }
+
+    Pane *new_pane = pane_split(ed->pane_root, ed->active_pane,
+                                SPLIT_VERTICAL);
+    if (!new_pane) {
+        editor_set_status(ed, "Error: could not split pane");
+        return;
+    }
+
+    ed->num_panes++;
+    recompute_pane_layout(ed);
+
+    /* Focus the new (right) pane */
+    ed->active_pane = new_pane;
+    editor_scroll(ed);
+
+    editor_set_status(ed, "Split vertical  (F8 to close)");
 }
 
 /* ============================================================================

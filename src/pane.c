@@ -185,3 +185,101 @@ void pane_layout(PaneNode *node, int x, int y, int w, int h)
         pane_layout(node->child2, x + left_w + 1, y, right_w, h);
     }
 }
+
+/* ============================================================================
+ * Split — convert a leaf into an internal node with two children
+ * ============================================================================ */
+
+/*
+ * find_leaf — recursively search the tree for the leaf node containing `target`.
+ *
+ * Returns the leaf PaneNode whose ->pane == target, or NULL if not found.
+ */
+static PaneNode *find_leaf(PaneNode *node, Pane *target)
+{
+    if (!node) return NULL;
+
+    if (node->split == SPLIT_NONE) {
+        /* Leaf: does it hold the pane we are looking for? */
+        return (node->pane == target) ? node : NULL;
+    }
+
+    /* Internal node: search both children */
+    PaneNode *found = find_leaf(node->child1, target);
+    if (found) return found;
+    return find_leaf(node->child2, target);
+}
+
+Pane *pane_split(PaneNode *root, Pane *target, SplitDir dir)
+{
+    PaneNode *leaf = find_leaf(root, target);
+    if (!leaf) return NULL;
+
+    /*
+     * Create a new pane by copying ALL state from the original.
+     * Both panes start showing the same buffer with the same cursor position.
+     * The user can then navigate independently in each pane.
+     */
+    Pane *new_pane = pane_create();
+    if (!new_pane) return NULL;
+
+    /*
+     * Struct copy: copies every field (buffer_index, cursor, viewport,
+     * selection, region, etc.) from target to new_pane in one shot.
+     * Then we reset search match position — each pane tracks its own.
+     */
+    *new_pane = *target;
+    new_pane->search_match_row = -1;
+    new_pane->search_match_col = -1;
+
+    /*
+     * Convert the leaf node into an internal split node.
+     *
+     * Before:  leaf { split=NONE, pane=target }
+     * After:   leaf { split=dir, pane=NULL,
+     *                 child1 = new_leaf(target),     ← original pane
+     *                 child2 = new_leaf(new_pane) }  ← copy
+     *
+     * The original pane moves into child1 (top or left).
+     * The copy goes into child2 (bottom or right).
+     */
+    PaneNode *c1 = pane_node_create_leaf(target);
+    PaneNode *c2 = pane_node_create_leaf(new_pane);
+    if (!c1 || !c2) {
+        /* Allocation failed — clean up and restore the leaf */
+        free(c1);
+        free(c2);
+        pane_destroy(new_pane);
+        return NULL;
+    }
+
+    leaf->split  = dir;
+    leaf->ratio  = 0.5f;
+    leaf->pane   = NULL;    /* no longer a leaf */
+    leaf->child1 = c1;
+    leaf->child2 = c2;
+
+    return new_pane;
+}
+
+/* ============================================================================
+ * Collect leaves — gather all leaf panes into a flat array
+ * ============================================================================ */
+
+void pane_collect_leaves(PaneNode *node, Pane **out, int *count)
+{
+    if (!node) return;
+
+    if (node->split == SPLIT_NONE) {
+        /* Leaf node: add its pane to the output array */
+        if (node->pane && *count < PANE_MAX) {
+            out[*count] = node->pane;
+            (*count)++;
+        }
+        return;
+    }
+
+    /* Internal node: recurse into both children */
+    pane_collect_leaves(node->child1, out, count);
+    pane_collect_leaves(node->child2, out, count);
+}

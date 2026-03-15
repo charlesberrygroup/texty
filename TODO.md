@@ -98,11 +98,12 @@ that all future phases will build on.
 - [x] Red box border with horizontal lines at top/bottom and vertical bars on sides
 - [x] Second Ctrl+U clears the region
 
-### Split Panes
-- [ ] Split editor horizontally (Ctrl+Shift+-)
-- [ ] Split editor vertically (Ctrl+Shift+\)
+### Split Panes (IN PROGRESS)
+- [x] Pane data structure (binary tree, Pane struct, pane_layout)
+- [x] Split editor horizontally (F6)
+- [x] Split editor vertically (F7)
 - [ ] Move focus between panes (Ctrl+Shift+Arrow)
-- [ ] Close pane
+- [ ] Close pane (F8)
 
 ### Build System Integration
 - [ ] Run build command (F5 / Ctrl+Shift+B)
