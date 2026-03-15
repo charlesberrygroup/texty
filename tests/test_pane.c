@@ -258,115 +258,6 @@ TEST(test_layout_too_small_to_split)
 }
 
 /* ============================================================================
- * pane_split — splitting a leaf into two children
- * ============================================================================ */
-
-TEST(test_split_horizontal)
-{
-    /*
-     * Split a single pane horizontally.  The original pane should become
-     * child1 (top) and a new pane should be child2 (bottom).
-     */
-    Pane *orig = pane_create();
-    orig->buffer_index = 3;
-    orig->cursor_row   = 10;
-    orig->cursor_col   = 5;
-    PaneNode *root = pane_node_create_leaf(orig);
-
-    Pane *new_pane = pane_split(root, orig, SPLIT_HORIZONTAL);
-
-    ASSERT(new_pane != NULL,              "split returns new pane");
-    ASSERT(new_pane != orig,              "new pane is different from original");
-    ASSERT(root->split == SPLIT_HORIZONTAL, "root is now a horizontal split");
-    ASSERT(root->pane == NULL,            "root is no longer a leaf");
-    ASSERT(root->child1 != NULL,          "child1 exists");
-    ASSERT(root->child2 != NULL,          "child2 exists");
-    ASSERT(root->child1->pane == orig,    "child1 holds original pane");
-    ASSERT(root->child2->pane == new_pane, "child2 holds new pane");
-
-    /* State should be copied */
-    ASSERT(new_pane->buffer_index == 3,   "buffer_index copied");
-    ASSERT(new_pane->cursor_row == 10,    "cursor_row copied");
-    ASSERT(new_pane->cursor_col == 5,     "cursor_col copied");
-
-    pane_node_destroy(root);
-}
-
-TEST(test_split_vertical)
-{
-    Pane *orig = pane_create();
-    PaneNode *root = pane_node_create_leaf(orig);
-
-    Pane *new_pane = pane_split(root, orig, SPLIT_VERTICAL);
-
-    ASSERT(new_pane != NULL,              "split returns new pane");
-    ASSERT(root->split == SPLIT_VERTICAL, "root is a vertical split");
-    ASSERT(root->child1->pane == orig,    "child1 is original");
-    ASSERT(root->child2->pane == new_pane, "child2 is new");
-
-    pane_node_destroy(root);
-}
-
-TEST(test_split_then_layout)
-{
-    /*
-     * Split horizontally, then compute layout.
-     * Both panes should get valid rectangles.
-     */
-    Pane *orig = pane_create();
-    PaneNode *root = pane_node_create_leaf(orig);
-
-    Pane *new_pane = pane_split(root, orig, SPLIT_HORIZONTAL);
-    pane_layout(root, 0, 1, 80, 21);
-
-    /* Top pane: 10 rows, bottom pane: 10 rows, 1 separator */
-    ASSERT(orig->height == 10,     "top pane height after split");
-    ASSERT(new_pane->height == 10, "bottom pane height after split");
-    ASSERT(orig->y == 1,           "top pane starts at y=1");
-    ASSERT(new_pane->y == 12,      "bottom pane starts after top + separator");
-    ASSERT(orig->width == 80,      "both panes have full width");
-    ASSERT(new_pane->width == 80,  "both panes have full width");
-
-    pane_node_destroy(root);
-}
-
-/* ============================================================================
- * pane_collect_leaves
- * ============================================================================ */
-
-TEST(test_collect_leaves_single)
-{
-    Pane *p = pane_create();
-    PaneNode *root = pane_node_create_leaf(p);
-
-    Pane *leaves[PANE_MAX];
-    int count = 0;
-    pane_collect_leaves(root, leaves, &count);
-
-    ASSERT(count == 1,      "1 leaf in single-pane tree");
-    ASSERT(leaves[0] == p,  "leaf is the original pane");
-
-    pane_node_destroy(root);
-}
-
-TEST(test_collect_leaves_after_split)
-{
-    Pane *orig = pane_create();
-    PaneNode *root = pane_node_create_leaf(orig);
-    Pane *new_pane = pane_split(root, orig, SPLIT_VERTICAL);
-
-    Pane *leaves[PANE_MAX];
-    int count = 0;
-    pane_collect_leaves(root, leaves, &count);
-
-    ASSERT(count == 2,         "2 leaves after one split");
-    ASSERT(leaves[0] == orig,  "first leaf is original");
-    ASSERT(leaves[1] == new_pane, "second leaf is new pane");
-
-    pane_node_destroy(root);
-}
-
-/* ============================================================================
  * main
  * ============================================================================ */
 
@@ -383,11 +274,6 @@ int main(void)
     RUN(test_layout_vertical_split);
     RUN(test_layout_nested_three_panes);
     RUN(test_layout_too_small_to_split);
-    RUN(test_split_horizontal);
-    RUN(test_split_vertical);
-    RUN(test_split_then_layout);
-    RUN(test_collect_leaves_single);
-    RUN(test_collect_leaves_after_split);
 
     TEST_SUMMARY();
 }

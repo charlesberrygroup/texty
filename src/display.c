@@ -156,12 +156,6 @@ void display_init(void)
          * background color of any text.
          */
         init_pair(CPAIR_REGION, COLOR_RED, -1);
-
-        /*
-         * CPAIR_PANE_BORDER — separator lines drawn between split panes.
-         * White on default background so it is visible but not distracting.
-         */
-        init_pair(CPAIR_PANE_BORDER, COLOR_WHITE, -1);
     }
 }
 
@@ -651,80 +645,56 @@ static void draw_filetree_panel(struct Editor *ed)
 /*
  * draw_region_hborder — draw a horizontal border line for the region box.
  *
- * Draws ┌──────┐ (top=1) or └──────┘ (top=0) across the given width
+ * Draws ┌──────┐ (top=1) or └──────┘ (top=0) across the full editor width
  * using ACS box-drawing characters in the CPAIR_REGION color (red).
  *
- * abs_row:   absolute terminal row (not relative to pane)
- * left_x:    leftmost column (absolute)
- * width:     total width of the border line
- * top:       1 = top border (┌─┐), 0 = bottom border (└─┘)
+ * screen_row:  0-based row within the text area (not absolute terminal row)
+ * panel_w:     column offset for the file-tree panel (0 if hidden)
+ * ed:          editor state, used for term_cols
+ * top:         1 = top border (┌─┐), 0 = bottom border (└─┘)
  */
-static void draw_region_hborder(int abs_row, int left_x, int width, int top)
+static void draw_region_hborder(int screen_row, int panel_w,
+                                struct Editor *ed, int top)
 {
+    int row = TAB_BAR_HEIGHT + screen_row;
     chtype left_ch  = top ? ACS_ULCORNER : ACS_LLCORNER;
     chtype right_ch = top ? ACS_URCORNER : ACS_LRCORNER;
+    int width = ed->term_cols - panel_w;  /* total columns in editor area */
 
     attron(COLOR_PAIR(CPAIR_REGION));
-    mvaddch(abs_row, left_x, left_ch);
-    mvhline(abs_row, left_x + 1, ACS_HLINE, width - 2);
-    mvaddch(abs_row, left_x + width - 1, right_ch);
+    mvaddch(row, panel_w, left_ch);
+    mvhline(row, panel_w + 1, ACS_HLINE, width - 2);
+    mvaddch(row, ed->term_cols - 1, right_ch);
     attroff(COLOR_PAIR(CPAIR_REGION));
 }
 
-/*
- * fill_to_edge — fill from the current cursor position to `right_col`
- * with spaces, using the current attribute.
- *
- * This replaces clrtoeol() for panes that don't extend to the terminal's
- * right edge.  clrtoeol() would clear INTO an adjacent pane — this function
- * only fills within the pane's boundaries.
- */
-static void fill_to_edge(int right_col)
-{
-    int cx;
-    /* getyx writes both row and col; we only need col (cx) */
-    { int _cy; getyx(stdscr, _cy, cx); (void)_cy; }
-    int n = right_col - cx;
-    if (n > 0)
-        hline(' ', n);      /* draw n spaces, does NOT advance cursor */
-}
-
-/*
- * draw_single_pane — render one pane's content within its screen rectangle.
- *
- * ed->active_pane must point to the pane being rendered (the caller sets
- * this temporarily before calling).  All per-pane state (cursor, viewport,
- * selection, region) is read through ed->active_pane.
- *
- * The pane's screen rectangle (x, y, width, height) determines where on
- * the terminal the content is drawn.
- */
-static void draw_single_pane(struct Editor *ed)
+static void draw_editor_area(struct Editor *ed)
 {
     Buffer *buf = editor_current_buffer(ed);
 
     /*
-     * Pane dimensions — read from the active pane's screen rectangle.
-     * These replace the old panel_w / text_rows / text_cols calculations
-     * that assumed a single editor area filling the whole screen.
-     *
-     * pane_x:      leftmost column of this pane on the terminal
-     * pane_y:      topmost row of this pane on the terminal
-     * pane_w:      total width of this pane in columns
-     * text_rows:   number of rows available for text content
-     * text_cols:   usable columns for text (pane width minus gutter)
-     * right_edge:  rightmost column of this pane (inclusive)
+     * panel_w — width consumed by the file explorer panel.
+     * When the panel is hidden or not yet created, this is 0.
+     * When the panel is visible, the editor area is narrowed by FILETREE_WIDTH
+     * columns so text is never drawn under the panel.
      */
-    Pane *pane = ed->active_pane;
-    int pane_x     = pane->x;
-    int pane_y     = pane->y;
-    int pane_w     = pane->width;
-    int text_rows  = pane->height;
-    int text_cols  = pane_w - GUTTER_WIDTH;
-    int right_edge = pane_x + pane_w - 1;
+    int panel_w = (ed->show_filetree && ed->filetree) ? FILETREE_WIDTH : 0;
+
+    /*
+     * Number of rows available for text content.
+     * We subtract 1 for the status bar at the bottom and TAB_BAR_HEIGHT
+     * for the tab bar at the top.
+     */
+    int text_rows = ed->term_rows - 1 - TAB_BAR_HEIGHT;
 
     /*
      * Pre-compute selection bounds once, outside the row loop.
+     *
+     * The selection is defined by an anchor point (where Shift was first
+     * pressed) and the current cursor.  We normalize so that sel_sr/sel_sc
+     * is always the earlier position and sel_er/sel_ec the later one.
+     *
+     * If no selection is active, sel_active is 0 and we skip all of this.
      */
     int sel_active = ed->active_pane->sel_active;
     int sel_sr = 0, sel_sc = 0, sel_er = 0, sel_ec = 0;
@@ -741,6 +711,13 @@ static void draw_single_pane(struct Editor *ed)
             sel_er = ar; sel_ec = ac;
         }
     }
+
+    /*
+     * text_cols — usable column width for text.
+     * We subtract the gutter width (line numbers) and the file-tree panel
+     * width (when visible) from the total terminal width.
+     */
+    int text_cols = ed->term_cols - GUTTER_WIDTH - panel_w;
 
     /*
      * Bracket match — find the bracket that pairs with the one under the
@@ -821,7 +798,7 @@ static void draw_single_pane(struct Editor *ed)
              */
             if (ed->active_pane->region_active && segment == 0
                     && buf_row == ed->active_pane->region_start_row) {
-                draw_region_hborder(pane_y + screen_row, pane_x, pane_w, 1);
+                draw_region_hborder(screen_row, panel_w, ed, 1);
                 screen_row++;
                 if (screen_row >= text_rows) break;
             }
@@ -830,7 +807,7 @@ static void draw_single_pane(struct Editor *ed)
              * Move to the start of this screen row, offset right by panel_w
              * so we start drawing after the file-tree panel (if visible).
              */
-            move(pane_y + screen_row, pane_x);
+            move(TAB_BAR_HEIGHT + screen_row, panel_w);
 
             if (buf_row >= buf->num_lines) {
                 /* Past end of file */
@@ -838,7 +815,7 @@ static void draw_single_pane(struct Editor *ed)
                 attron(COLOR_PAIR(CPAIR_GUTTER));
                 printw("  ~  ");
                 attroff(COLOR_PAIR(CPAIR_GUTTER));
-                fill_to_edge(right_edge + 1);
+                clrtoeol();
                 screen_row++;
                 continue;
             }
@@ -944,7 +921,7 @@ static void draw_single_pane(struct Editor *ed)
                                       syn_tokens,
                                       ed);
                 attrset(row_attr);
-                fill_to_edge(right_edge + 1);
+                clrtoeol();
                 attrset(A_NORMAL);
             } else {
                 /*
@@ -974,7 +951,7 @@ static void draw_single_pane(struct Editor *ed)
                     if (draw_len > 0)
                         draw_text_segment(draw_start, draw_len,
                                           ed->show_whitespace);
-                    fill_to_edge(right_edge + 1);
+                    clrtoeol();
                     attrset(A_NORMAL);
                 } else {
                     if (vis_sel_start > 0) {
@@ -995,7 +972,7 @@ static void draw_single_pane(struct Editor *ed)
                                           ed->show_whitespace);
                     }
                     attrset(row_attr);
-                    fill_to_edge(right_edge + 1);
+                    clrtoeol();
                     attrset(A_NORMAL);
                 }
             }
@@ -1010,7 +987,7 @@ static void draw_single_pane(struct Editor *ed)
                  * all content rows use ACS_VLINE for the right border.
                  */
                 attron(COLOR_PAIR(CPAIR_REGION));
-                mvaddch(pane_y + screen_row, right_edge, ACS_VLINE);
+                mvaddch(TAB_BAR_HEIGHT + screen_row, ed->term_cols - 1, ACS_VLINE);
                 attroff(COLOR_PAIR(CPAIR_REGION));
             }
 
@@ -1032,7 +1009,7 @@ static void draw_single_pane(struct Editor *ed)
              * horizontal line └──────────┘ across the full editor width.
              */
             if (was_region_end && finished_line && screen_row < text_rows) {
-                draw_region_hborder(pane_y + screen_row, pane_x, pane_w, 0);
+                draw_region_hborder(screen_row, panel_w, ed, 0);
                 screen_row++;
             }
         }
@@ -1061,7 +1038,7 @@ static void draw_single_pane(struct Editor *ed)
              * ┌──────────┐ across the full editor width.
              */
             if (ed->active_pane->region_active && buf_row == ed->active_pane->region_start_row) {
-                draw_region_hborder(pane_y + screen_row, pane_x, pane_w, 1);
+                draw_region_hborder(screen_row, panel_w, ed, 1);
                 screen_row++;
                 if (screen_row >= text_rows) break;
             }
@@ -1070,7 +1047,7 @@ static void draw_single_pane(struct Editor *ed)
              * Position at the start of this screen row, offset right by panel_w
              * so we draw in the editor area (right of the file-tree panel).
              */
-            move(pane_y + screen_row, pane_x);
+            move(TAB_BAR_HEIGHT + screen_row, panel_w);
 
             if (buf_row >= buf->num_lines) {
                 /*
@@ -1080,7 +1057,7 @@ static void draw_single_pane(struct Editor *ed)
                 attron(COLOR_PAIR(CPAIR_GUTTER));
                 printw("  ~  ");
                 attroff(COLOR_PAIR(CPAIR_GUTTER));
-                fill_to_edge(right_edge + 1);
+                clrtoeol();
                 screen_row++;
                 buf_row++;
                 continue;
@@ -1228,7 +1205,7 @@ static void draw_single_pane(struct Editor *ed)
                                           ed);
                 }
                 attrset(row_attr);
-                fill_to_edge(right_edge + 1);
+                clrtoeol();
                 attrset(A_NORMAL);
 
             } else if (!has_selection_on_row) {
@@ -1236,7 +1213,7 @@ static void draw_single_pane(struct Editor *ed)
                 attrset(row_attr);
                 if (draw_len > 0)
                     draw_text_segment(draw_start, draw_len, ed->show_whitespace);
-                fill_to_edge(right_edge + 1);
+                clrtoeol();
                 attrset(A_NORMAL);
             } else {
                 /*
@@ -1269,7 +1246,7 @@ static void draw_single_pane(struct Editor *ed)
                 }
 
                 attrset(row_attr);
-                fill_to_edge(right_edge + 1);
+                clrtoeol();
                 attrset(A_NORMAL);
             }
 
@@ -1282,7 +1259,7 @@ static void draw_single_pane(struct Editor *ed)
                  * all content rows use ACS_VLINE for the right border.
                  */
                 attron(COLOR_PAIR(CPAIR_REGION));
-                mvaddch(pane_y + screen_row, right_edge, ACS_VLINE);
+                mvaddch(TAB_BAR_HEIGHT + screen_row, ed->term_cols - 1, ACS_VLINE);
                 attroff(COLOR_PAIR(CPAIR_REGION));
             }
 
@@ -1298,130 +1275,11 @@ static void draw_single_pane(struct Editor *ed)
              * └──────────┘ across the full editor width.
              */
             if (was_region_end && screen_row < text_rows) {
-                draw_region_hborder(pane_y + screen_row, pane_x, pane_w, 0);
+                draw_region_hborder(screen_row, panel_w, ed, 0);
                 screen_row++;
             }
         }
     }
-}
-
-/* ============================================================================
- * Internal: draw separator lines between split panes
- * ============================================================================ */
-
-/*
- * draw_pane_separators — recursively draw the separator lines for the tree.
- *
- * Each internal node in the pane tree represents a split.  The separator
- * occupies the 1-row or 1-column gap between the two children's rectangles.
- *
- * Horizontal split:  draw a horizontal line of ACS_HLINE characters.
- * Vertical split:    draw a vertical line of ACS_VLINE characters.
- *
- * The separator position is derived from the children's rectangles:
- *   - Horizontal: row = child1.y + child1.height (the row between them)
- *   - Vertical:   col = child1.x + child1.width (the column between them)
- */
-static void draw_pane_separators(PaneNode *node)
-{
-    if (!node || node->split == SPLIT_NONE) return;
-
-    if (node->split == SPLIT_HORIZONTAL) {
-        /*
-         * The separator row is between child1's bottom and child2's top.
-         * child1 occupies rows [y .. y+height), so the separator is at
-         * y + height = child2->y - 1 (they should match).
-         */
-        Pane *leaves1[PANE_MAX];
-        int count1 = 0;
-        pane_collect_leaves(node->child1, leaves1, &count1);
-        if (count1 > 0) {
-            /* Use the first child1 leaf to find the separator row */
-            Pane *c1 = leaves1[0];
-            int sep_row = c1->y + c1->height;
-            int left_x  = c1->x;
-            /* Find the width by looking at the second child too */
-            Pane *leaves2[PANE_MAX];
-            int count2 = 0;
-            pane_collect_leaves(node->child2, leaves2, &count2);
-            int width = (count2 > 0) ? leaves2[0]->width : c1->width;
-
-            attron(COLOR_PAIR(CPAIR_PANE_BORDER));
-            mvhline(sep_row, left_x, ACS_HLINE, width);
-            attroff(COLOR_PAIR(CPAIR_PANE_BORDER));
-        }
-    } else {
-        /* Vertical split: separator column between left and right children */
-        Pane *leaves1[PANE_MAX];
-        int count1 = 0;
-        pane_collect_leaves(node->child1, leaves1, &count1);
-        if (count1 > 0) {
-            Pane *c1 = leaves1[0];
-            int sep_col = c1->x + c1->width;
-            int top_y   = c1->y;
-            int height  = c1->height;
-
-            attron(COLOR_PAIR(CPAIR_PANE_BORDER));
-            mvvline(sep_col, top_y, ACS_VLINE, height);
-            attroff(COLOR_PAIR(CPAIR_PANE_BORDER));
-        }
-    }
-
-    /* Recurse into children for nested splits */
-    draw_pane_separators(node->child1);
-    draw_pane_separators(node->child2);
-}
-
-/* ============================================================================
- * Internal: draw all editor panes (public entry point for rendering)
- * ============================================================================ */
-
-static void draw_editor_area(struct Editor *ed)
-{
-    /*
-     * Compute the screen rectangle available for panes.
-     * The file tree panel (if visible) reduces the left side.
-     * The tab bar occupies the top, and the status bar occupies the bottom.
-     */
-    int panel_w = (ed->show_filetree && ed->filetree) ? FILETREE_WIDTH : 0;
-    int area_x  = panel_w;
-    int area_y  = TAB_BAR_HEIGHT;
-    int area_w  = ed->term_cols - panel_w;
-    int area_h  = ed->term_rows - 1 - TAB_BAR_HEIGHT;
-
-    /*
-     * Assign screen rectangles to all leaf panes based on the split tree.
-     * This must be called before rendering so each pane knows where to draw.
-     */
-    pane_layout(ed->pane_root, area_x, area_y, area_w, area_h);
-
-    /*
-     * Collect all leaf panes into a flat array for iteration.
-     */
-    Pane *leaves[PANE_MAX];
-    int num_leaves = 0;
-    pane_collect_leaves(ed->pane_root, leaves, &num_leaves);
-
-    /*
-     * Render each pane.  We temporarily set ed->active_pane to the pane
-     * being rendered so that all existing code that reads from active_pane
-     * (cursor, viewport, selection, etc.) automatically uses the right pane.
-     *
-     * This includes editor_current_buffer() and editor_find_bracket_match(),
-     * which are called from within draw_single_pane().
-     */
-    Pane *saved_active = ed->active_pane;
-    for (int i = 0; i < num_leaves; i++) {
-        ed->active_pane = leaves[i];
-        draw_single_pane(ed);
-    }
-    ed->active_pane = saved_active;
-
-    /*
-     * Draw separator lines between panes (if there are splits).
-     */
-    if (num_leaves > 1)
-        draw_pane_separators(ed->pane_root);
 }
 
 /* ============================================================================
@@ -1518,8 +1376,9 @@ void display_render(struct Editor *ed)
      *   A) Filetree has focus: put the cursor on the highlighted tree entry.
      *   B) Editor has focus:   put the cursor at the editor cursor position.
      *
-     * Pane coordinates are used for editor cursor positioning.
+     * panel_w is the horizontal offset of the editor area from the left edge.
      */
+    int panel_w = (ed->show_filetree && ed->filetree) ? FILETREE_WIDTH : 0;
     int screen_col, screen_row;
 
     if (ed->filetree_focus && ed->show_filetree && ed->filetree) {
@@ -1542,69 +1401,68 @@ void display_render(struct Editor *ed)
         /*
          * Case B (word-wrap on): compute cursor row from wrapped-line heights.
          *
-         * text_cols_wr uses the active pane's width (not the full terminal)
-         * so wrapping matches what draw_single_pane actually rendered.
+         * text_cols_wr must account for the panel width so wrapping matches
+         * what draw_editor_area actually rendered.
          */
-        Pane *ap = ed->active_pane;
-        int text_cols_wr = ap->width - GUTTER_WIDTH;
+        int text_cols_wr = ed->term_cols - GUTTER_WIDTH - panel_w;
         if (text_cols_wr <= 0) text_cols_wr = 1;
 
         /* Count screen rows consumed by lines before cursor_row */
         int sr = 0;
         Buffer *buf_wr = editor_current_buffer(ed);
         if (buf_wr) {
-            for (int r = ap->view_row; r < ap->cursor_row; r++) {
+            for (int r = ed->active_pane->view_row; r < ed->active_pane->cursor_row; r++) {
                 int len = buffer_line_len(buf_wr, r);
                 sr += line_screen_rows_d(len, text_cols_wr);
             }
         }
         /* Add the sub-row within the cursor line */
-        sr += ap->cursor_col / text_cols_wr;
+        sr += ed->active_pane->cursor_col / text_cols_wr;
 
-        screen_row = ap->y + sr;
-        screen_col = ap->x + GUTTER_WIDTH + (ap->cursor_col % text_cols_wr);
+        screen_row = TAB_BAR_HEIGHT + sr;
+        screen_col = panel_w + GUTTER_WIDTH + (ed->active_pane->cursor_col % text_cols_wr);
 
         /*
          * Adjust for region border rows that consume screen space.
+         * The top border is drawn before region_start_row, so if the
+         * cursor is at or past that row, shift down by 1.  Similarly
+         * the bottom border is drawn after region_end_row.
          */
-        if (ap->region_active) {
-            if (ap->cursor_row >= ap->region_start_row)
-                screen_row++;
-            if (ap->cursor_row > ap->region_end_row)
-                screen_row++;
+        if (ed->active_pane->region_active) {
+            if (ed->active_pane->cursor_row >= ed->active_pane->region_start_row)
+                screen_row++;          /* top border pushed us down */
+            if (ed->active_pane->cursor_row > ed->active_pane->region_end_row)
+                screen_row++;          /* bottom border pushed us down */
         }
 
     } else {
         /*
          * Case B (normal mode): straightforward linear mapping.
-         * Use the active pane's rectangle for positioning.
+         * Add panel_w so the cursor lands in the editor area, not in the panel.
          */
-        Pane *ap = ed->active_pane;
-        screen_col = ap->x + GUTTER_WIDTH + (ap->cursor_col - ap->view_col);
-        screen_row = ap->y + (ap->cursor_row - ap->view_row);
+        screen_col = panel_w + GUTTER_WIDTH + (ed->active_pane->cursor_col - ed->active_pane->view_col);
+        screen_row = TAB_BAR_HEIGHT + (ed->active_pane->cursor_row - ed->active_pane->view_row);
 
-        /* Adjust for region border rows */
-        if (ap->region_active) {
-            if (ap->cursor_row >= ap->region_start_row)
+        /* Adjust for region border rows (same logic as word-wrap case) */
+        if (ed->active_pane->region_active) {
+            if (ed->active_pane->cursor_row >= ed->active_pane->region_start_row)
                 screen_row++;
-            if (ap->cursor_row > ap->region_end_row)
+            if (ed->active_pane->cursor_row > ed->active_pane->region_end_row)
                 screen_row++;
         }
     }
 
     /* Clamp to prevent the cursor from escaping the text area */
-    Pane *ap_clamp = ed->active_pane;
-    int text_area_top    = ap_clamp->y;
-    int text_area_bottom = ap_clamp->y + ap_clamp->height - 1;
+    int text_area_top    = TAB_BAR_HEIGHT;
+    int text_area_bottom = ed->term_rows - 2;   /* one above the status bar */
     int min_col          = (ed->filetree_focus && ed->show_filetree && ed->filetree)
                            ? 0
-                           : ap_clamp->x + GUTTER_WIDTH;
-    int max_col          = ap_clamp->x + ap_clamp->width - 1;
+                           : panel_w + GUTTER_WIDTH;
 
     if (screen_row < text_area_top)    screen_row = text_area_top;
     if (screen_row > text_area_bottom) screen_row = text_area_bottom;
     if (screen_col < min_col)          screen_col = min_col;
-    if (screen_col > max_col)          screen_col = max_col;
+    if (screen_col >= ed->term_cols)   screen_col = ed->term_cols - 1;
 
     move(screen_row, screen_col);
 

@@ -199,31 +199,4 @@ void pane_node_destroy(PaneNode *node);
  */
 void pane_layout(PaneNode *node, int x, int y, int w, int h);
 
-/**
- * pane_split — split a pane into two children.
- *
- * Finds the leaf node containing `target` in the tree rooted at `root`,
- * converts that leaf into an internal split node, and creates two new leaf
- * children.  The original pane becomes child1 (top or left), a new copy
- * becomes child2 (bottom or right).
- *
- * Both children start with the same buffer, cursor, and viewport state.
- * The split ratio defaults to 50/50.
- *
- * Returns a pointer to the newly created pane (child2), or NULL on failure.
- * The caller should call pane_layout() afterwards to update screen rectangles.
- */
-Pane *pane_split(PaneNode *root, Pane *target, SplitDir dir);
-
-/**
- * pane_collect_leaves — gather all leaf panes into a flat array.
- *
- * Walks the tree rooted at `node` and appends each leaf's Pane pointer
- * to `out[]`.  `*count` is updated with the total number of leaves found.
- *
- * The caller must initialise *count to 0 before the first call.
- * `out` must be large enough to hold all leaves (PANE_MAX entries).
- */
-void pane_collect_leaves(PaneNode *node, Pane **out, int *count);
-
 #endif /* PANE_H */
