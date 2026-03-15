@@ -30,6 +30,25 @@ static void refresh_inline_diff(Editor *ed);
 static void refresh_git_blame(Editor *ed);
 
 /*
+ * get_repo_root — get the git repo root for the current buffer, with CWD fallback.
+ *
+ * Tries the buffer's git_state.repo_root first.  If that's NULL (e.g. the
+ * editor was opened without a file), falls back to detecting the repo from
+ * the current working directory.
+ *
+ * Returns a heap-allocated string that the caller must free(), or NULL if
+ * not in a git repo.
+ */
+static char *get_repo_root(Editor *ed)
+{
+    Buffer *buf = editor_current_buffer(ed);
+    if (buf && buf->git_state.repo_root && buf->git_state.repo_root[0] != '\0')
+        return strdup(buf->git_state.repo_root);
+
+    return git_find_repo_root(NULL);
+}
+
+/*
  * clamp — return `value` clamped to the range [lo, hi].
  */
 static int clamp(int value, int lo, int hi)
@@ -2161,10 +2180,11 @@ void editor_toggle_git_blame(Editor *ed)
 
 void editor_git_commit(Editor *ed)
 {
-    Buffer *buf = editor_current_buffer(ed);
-    if (!buf) return;
-
-    const char *root = buf->git_state.repo_root;
+    /*
+     * get_repo_root returns a heap-allocated string (CWD fallback if the
+     * current buffer has no filename).  Must be freed before returning.
+     */
+    char *root = get_repo_root(ed);
     if (!root) {
         editor_set_status(ed, "Not in a git repository.");
         return;
@@ -2179,6 +2199,7 @@ void editor_git_commit(Editor *ed)
     if (has_staged <= 0) {
         editor_set_status(ed,
             "Nothing staged to commit. Use F11 to stage hunks first.");
+        free(root);
         return;
     }
 
@@ -2192,6 +2213,7 @@ void editor_git_commit(Editor *ed)
     if (!msg || msg[0] == '\0') {
         free(msg);
         editor_set_status(ed, "Commit cancelled.");
+        free(root);
         return;
     }
 
@@ -2201,6 +2223,7 @@ void editor_git_commit(Editor *ed)
 
     if (result != 0) {
         editor_set_status(ed, "Commit failed (pre-commit hook or git error).");
+        free(root);
         return;
     }
 
@@ -2225,8 +2248,10 @@ void editor_git_commit(Editor *ed)
         refresh_inline_diff(ed);
 
     /* Refresh the git status panel if it's open */
-    if (ed->show_git_panel && ed->git_status && root)
+    if (ed->show_git_panel && ed->git_status)
         git_status_refresh(ed->git_status, root);
+
+    free(root);
 }
 
 /* ============================================================================
@@ -2240,7 +2265,12 @@ void editor_stage_hunk(Editor *ed)
 
     /* Verify we're in a git repo with a tracked, saved file */
     if (!buf->git_state.repo_root) {
-        editor_set_status(ed, "Not in a git repository.");
+        /* No repo root from buffer — might be an unnamed buffer */
+        if (!buf->filename) {
+            editor_set_status(ed, "Save the file first to use git features.");
+        } else {
+            editor_set_status(ed, "Not in a git repository.");
+        }
         return;
     }
     if (!buf->git_state.is_tracked) {
