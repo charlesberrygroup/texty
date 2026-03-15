@@ -84,14 +84,19 @@ that all future phases will build on.
 
 ---
 
-## Phase 3 — IDE Features ✅ IN PROGRESS
+## Phase 3 — IDE Features (IN PROGRESS)
 
-### File Explorer
+### File Explorer ✅
 - [x] Side panel showing directory tree
 - [x] Toggle file explorer (Ctrl+B)
 - [x] Open file from tree with Enter
 - [x] Create / rename / delete files and directories
 - [x] Expand/collapse directories
+
+### Region Highlight ✅
+- [x] Mark selected lines as a persistent region (Ctrl+U)
+- [x] Red box border with horizontal lines at top/bottom and vertical bars on sides
+- [x] Second Ctrl+U clears the region
 
 ### Split Panes
 - [ ] Split editor horizontally (Ctrl+Shift+-)

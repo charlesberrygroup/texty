@@ -24,6 +24,8 @@ A terminal-based IDE written in C, built from scratch.
 - Status bar with filename, cursor position, and modified indicator
 - Horizontal and vertical scrolling
 - Terminal resize support
+- Syntax highlighting for C, C++, Python, JavaScript, TypeScript, Rust, Go, JSON, Markdown, Shell, and Makefile
+- Region highlight (Ctrl+U) — mark lines with a visible box border
 - File explorer panel (Ctrl+B) — browse, open, create, rename, and delete files
 
 ## Requirements
@@ -77,6 +79,7 @@ Produces the `./texty` binary.
 |------------------|--------------------------------------|
 | F2               | Toggle whitespace characters         |
 | F4               | Toggle word wrap                     |
+| Ctrl+U           | Mark/clear region highlight          |
 
 ### Selection & clipboard
 
