@@ -13,6 +13,7 @@
 #include "editor.h"
 #include "buffer.h"
 #include "syntax.h"
+#include "filetree.h"   /* for FileTree, FlatEntry, filetree_is_expanded */
 
 #include <ncurses.h>
 #include <string.h>
@@ -135,6 +136,18 @@ void display_init(void)
         init_pair(CPAIR_SYN_COMMENT,  COLOR_BLUE,    -1);
         init_pair(CPAIR_SYN_PREPROC,  COLOR_MAGENTA, -1);
         init_pair(CPAIR_SYN_NUMBER,   COLOR_RED,     -1);
+
+        /*
+         * File explorer panel color pairs.
+         *
+         * CPAIR_FILETREE_DIR    — directories: blue foreground, terminal default bg.
+         * CPAIR_FILETREE_FILE   — files: terminal default fg and bg (plain text).
+         * CPAIR_FILETREE_CURSOR — cursor row when tree has focus: black on white,
+         *                         visible on both dark and light terminals.
+         */
+        init_pair(CPAIR_FILETREE_DIR,    COLOR_BLUE,  -1);
+        init_pair(CPAIR_FILETREE_FILE,   -1,          -1);
+        init_pair(CPAIR_FILETREE_CURSOR, COLOR_BLACK, COLOR_WHITE);
     }
 }
 
@@ -460,9 +473,178 @@ static int line_screen_rows_d(int line_len, int text_cols)
     return (line_len + text_cols - 1) / text_cols;
 }
 
+/* ============================================================================
+ * Internal: draw the file explorer panel (left side panel)
+ * ============================================================================ */
+
+/*
+ * draw_filetree_panel — render the file tree in the left FILETREE_WIDTH columns.
+ *
+ * Layout:
+ *   Row TAB_BAR_HEIGHT         : header (" Files")
+ *   Row TAB_BAR_HEIGHT+1 ...   : tree entries (one per row)
+ *   Each row ends with '|' at column FILETREE_WIDTH-1 as a border separator.
+ *
+ * Scrolling:
+ *   filetree_scroll is the index of the first entry shown in the entry area.
+ *   We adjust it here so the cursor always stays on screen.
+ *
+ * Focus:
+ *   When filetree_focus == 1, the cursor row uses CPAIR_FILETREE_CURSOR
+ *   (black on white, clearly highlighted).
+ *   When filetree_focus == 0, the cursor row is only bold (dimmed highlight).
+ */
+static void draw_filetree_panel(struct Editor *ed)
+{
+    FileTree *ft = ed->filetree;
+
+    /*
+     * panel_rows: total rows available for the panel (tab bar at top, status
+     * bar at bottom are reserved).
+     *
+     * entry_rows: we give the first panel row to the "Files" header, leaving
+     * entry_rows rows for actual tree entries.
+     */
+    int panel_rows = ed->term_rows - TAB_BAR_HEIGHT - 1;
+    int entry_rows = panel_rows - 1;  /* one row reserved for header */
+
+    /*
+     * Scroll adjustment — keep filetree_cursor visible within entry_rows.
+     *
+     * If the cursor is above the scroll window, scroll up.
+     * If the cursor is at or below the bottom edge, scroll down.
+     * Always clamp filetree_scroll to >= 0.
+     */
+    if (ed->filetree_cursor < ed->filetree_scroll)
+        ed->filetree_scroll = ed->filetree_cursor;
+    if (ed->filetree_cursor >= ed->filetree_scroll + entry_rows)
+        ed->filetree_scroll = ed->filetree_cursor - entry_rows + 1;
+    if (ed->filetree_scroll < 0)
+        ed->filetree_scroll = 0;
+
+    /* ---- Header row ---- */
+    /*
+     * move(row, col): position the ncurses cursor before drawing.
+     * TAB_BAR_HEIGHT is row 1 (row 0 is the tab bar).
+     * We draw the header with A_BOLD then add the border '|' character.
+     *
+     * printw("%-*s", width, text) left-justifies `text` in a field of `width`
+     * characters, padding with spaces on the right.  This ensures the header
+     * fills the entire panel width (minus the border character).
+     */
+    move(TAB_BAR_HEIGHT, 0);
+    attron(A_BOLD);
+    printw("%-*s", FILETREE_WIDTH - 1, " Files");
+    attroff(A_BOLD);
+    addch('|');  /* vertical border separator between panel and editor */
+
+    /* ---- Entry rows ---- */
+    for (int r = 0; r < entry_rows; r++) {
+        int screen_row = TAB_BAR_HEIGHT + 1 + r;  /* +1 for header */
+        int idx        = ed->filetree_scroll + r;
+
+        move(screen_row, 0);
+
+        if (idx >= ft->count) {
+            /*
+             * We have scrolled past the last entry.  Draw a blank row to
+             * fill the panel height and keep the border '|' consistent.
+             */
+            printw("%-*s", FILETREE_WIDTH - 1, "");
+            addch('|');
+            continue;
+        }
+
+        FlatEntry *e          = &ft->entries[idx];
+        int        is_cursor  = (idx == ed->filetree_cursor);
+
+        /*
+         * Calculate the indentation for this entry.
+         * Each nesting level adds 2 spaces.  We cap indent so there is always
+         * at least 3 characters left for the icon, space, and name.
+         */
+        int indent = e->depth * 2;
+        if (indent >= FILETREE_WIDTH - 3)
+            indent = FILETREE_WIDTH - 3;
+
+        /*
+         * Icon character:
+         *   '>' — collapsed directory (has children not shown)
+         *   'v' — expanded directory (children are shown below it)
+         *   ' ' — regular file
+         */
+        char icon = ' ';
+        if (e->is_dir) {
+            icon = filetree_is_expanded(ft, e->path) ? 'v' : '>';
+        }
+
+        /*
+         * How many characters are available for the filename?
+         *   FILETREE_WIDTH - 1   : full panel minus the border '|'
+         *   - indent             : minus indentation
+         *   - 2                  : minus icon + space after icon
+         */
+        int name_width = FILETREE_WIDTH - 1 - indent - 2;
+        if (name_width < 1) name_width = 1;
+
+        /*
+         * Build the display string for this entry into a local buffer.
+         *
+         * snprintf format: "%*s%c %-*.*s"
+         *   %*s           — `indent` spaces (empty string padded to width)
+         *   %c            — the icon character
+         *   (space)       — one space between icon and name
+         *   %-*.*s        — name, left-justified, min and max width = name_width
+         *                   (the '.' before * means "max chars to print" —
+         *                    this truncates long names instead of wrapping)
+         */
+        char line_buf[FILETREE_WIDTH + 1];
+        snprintf(line_buf, sizeof(line_buf), "%*s%c %-*.*s",
+                 indent, "",
+                 icon,
+                 name_width, name_width, e->name);
+
+        /*
+         * Apply the appropriate visual attribute for this row, then print it.
+         *
+         * Priority (highest first):
+         *   1. Cursor + focus   : CPAIR_FILETREE_CURSOR (black on white) + bold
+         *   2. Cursor, no focus : A_BOLD only (subtle indication)
+         *   3. Directory        : CPAIR_FILETREE_DIR (blue) + bold
+         *   4. Regular file     : no special attribute
+         */
+        if (is_cursor && ed->filetree_focus) {
+            attron(COLOR_PAIR(CPAIR_FILETREE_CURSOR) | A_BOLD);
+            printw("%-*s", FILETREE_WIDTH - 1, line_buf);
+            attroff(COLOR_PAIR(CPAIR_FILETREE_CURSOR) | A_BOLD);
+        } else if (is_cursor) {
+            attron(A_BOLD);
+            printw("%-*s", FILETREE_WIDTH - 1, line_buf);
+            attroff(A_BOLD);
+        } else if (e->is_dir) {
+            attron(COLOR_PAIR(CPAIR_FILETREE_DIR) | A_BOLD);
+            printw("%-*s", FILETREE_WIDTH - 1, line_buf);
+            attroff(COLOR_PAIR(CPAIR_FILETREE_DIR) | A_BOLD);
+        } else {
+            /* Plain file — use default terminal colors */
+            printw("%-*s", FILETREE_WIDTH - 1, line_buf);
+        }
+
+        addch('|');  /* border character — always at column FILETREE_WIDTH-1 */
+    }
+}
+
 static void draw_editor_area(struct Editor *ed)
 {
     Buffer *buf = editor_current_buffer(ed);
+
+    /*
+     * panel_w — width consumed by the file explorer panel.
+     * When the panel is hidden or not yet created, this is 0.
+     * When the panel is visible, the editor area is narrowed by FILETREE_WIDTH
+     * columns so text is never drawn under the panel.
+     */
+    int panel_w = (ed->show_filetree && ed->filetree) ? FILETREE_WIDTH : 0;
 
     /*
      * Number of rows available for text content.
@@ -497,10 +679,11 @@ static void draw_editor_area(struct Editor *ed)
     }
 
     /*
-     * text_cols — usable column width for text (terminal width minus gutter).
-     * Needed by both the normal and word-wrap rendering paths.
+     * text_cols — usable column width for text.
+     * We subtract the gutter width (line numbers) and the file-tree panel
+     * width (when visible) from the total terminal width.
      */
-    int text_cols = ed->term_cols - GUTTER_WIDTH;
+    int text_cols = ed->term_cols - GUTTER_WIDTH - panel_w;
 
     /*
      * Bracket match — find the bracket that pairs with the one under the
@@ -573,7 +756,11 @@ static void draw_editor_area(struct Editor *ed)
         const SyntaxToken *syn_tokens = NULL;
 
         for (int screen_row = 0; screen_row < text_rows; screen_row++) {
-            move(TAB_BAR_HEIGHT + screen_row, 0);
+            /*
+             * Move to the start of this screen row, offset right by panel_w
+             * so we start drawing after the file-tree panel (if visible).
+             */
+            move(TAB_BAR_HEIGHT + screen_row, panel_w);
 
             if (buf_row >= buf->num_lines) {
                 /* Past end of file */
@@ -740,8 +927,11 @@ static void draw_editor_area(struct Editor *ed)
         for (int screen_row = 0; screen_row < text_rows; screen_row++) {
             int buf_row = ed->view_row + screen_row;
 
-            /* Position at the start of this screen row (offset past the tab bar) */
-            move(TAB_BAR_HEIGHT + screen_row, 0);
+            /*
+             * Position at the start of this screen row, offset right by panel_w
+             * so we draw in the editor area (right of the file-tree panel).
+             */
+            move(TAB_BAR_HEIGHT + screen_row, panel_w);
 
             if (buf_row >= buf->num_lines) {
                 /*
@@ -997,27 +1187,57 @@ void display_render(struct Editor *ed)
     erase();
 
     draw_tab_bar(ed);
+
+    /*
+     * Draw the file explorer panel BEFORE the editor area.
+     * The panel occupies the leftmost FILETREE_WIDTH columns; draw_editor_area
+     * will offset its own drawing rightward by panel_w to avoid overlapping.
+     */
+    if (ed->show_filetree && ed->filetree)
+        draw_filetree_panel(ed);
+
     draw_editor_area(ed);
     draw_status_bar(ed);
 
     /*
-     * Position the terminal cursor at the editor cursor position.
+     * Position the terminal cursor.
      *
-     * In normal mode:
-     *   screen_col = GUTTER_WIDTH + (cursor_col - view_col)
-     *   screen_row = TAB_BAR_HEIGHT + (cursor_row - view_row)
+     * There are two cases:
+     *   A) Filetree has focus: put the cursor on the highlighted tree entry.
+     *   B) Editor has focus:   put the cursor at the editor cursor position.
      *
-     * In word-wrap mode, each buffer line can span multiple screen rows,
-     * so we must count the actual screen rows consumed by all lines between
-     * view_row and cursor_row, then add the cursor's sub-row within its line.
+     * panel_w is the horizontal offset of the editor area from the left edge.
      */
+    int panel_w = (ed->show_filetree && ed->filetree) ? FILETREE_WIDTH : 0;
     int screen_col, screen_row;
 
-    if (ed->word_wrap) {
-        int text_cols_wr = ed->term_cols - GUTTER_WIDTH;
+    if (ed->filetree_focus && ed->show_filetree && ed->filetree) {
+        /*
+         * Case A: cursor belongs in the file-tree panel.
+         *
+         * The header occupies row TAB_BAR_HEIGHT.  Entry rows start at
+         * TAB_BAR_HEIGHT + 1.  The visible entry at position (cursor - scroll)
+         * relative to the scroll offset is shown at that offset.
+         */
+        int panel_entry_rows = ed->term_rows - TAB_BAR_HEIGHT - 2; /* -1 header, -1 status */
+        int vis_row = ed->filetree_cursor - ed->filetree_scroll;
+        if (vis_row < 0)               vis_row = 0;
+        if (vis_row >= panel_entry_rows) vis_row = panel_entry_rows - 1;
+
+        screen_row = TAB_BAR_HEIGHT + 1 + vis_row;  /* +1 to skip header */
+        screen_col = 0;
+
+    } else if (ed->word_wrap) {
+        /*
+         * Case B (word-wrap on): compute cursor row from wrapped-line heights.
+         *
+         * text_cols_wr must account for the panel width so wrapping matches
+         * what draw_editor_area actually rendered.
+         */
+        int text_cols_wr = ed->term_cols - GUTTER_WIDTH - panel_w;
         if (text_cols_wr <= 0) text_cols_wr = 1;
 
-        /* Count screen rows from view_row up to (but not including) cursor_row */
+        /* Count screen rows consumed by lines before cursor_row */
         int sr = 0;
         Buffer *buf_wr = editor_current_buffer(ed);
         if (buf_wr) {
@@ -1026,23 +1246,31 @@ void display_render(struct Editor *ed)
                 sr += line_screen_rows_d(len, text_cols_wr);
             }
         }
-        /* Add the sub-row within cursor_row */
+        /* Add the sub-row within the cursor line */
         sr += ed->cursor_col / text_cols_wr;
 
         screen_row = TAB_BAR_HEIGHT + sr;
-        screen_col = GUTTER_WIDTH  + (ed->cursor_col % text_cols_wr);
+        screen_col = panel_w + GUTTER_WIDTH + (ed->cursor_col % text_cols_wr);
+
     } else {
-        screen_col = GUTTER_WIDTH + (ed->cursor_col - ed->view_col);
+        /*
+         * Case B (normal mode): straightforward linear mapping.
+         * Add panel_w so the cursor lands in the editor area, not in the panel.
+         */
+        screen_col = panel_w + GUTTER_WIDTH + (ed->cursor_col - ed->view_col);
         screen_row = TAB_BAR_HEIGHT + (ed->cursor_row - ed->view_row);
     }
 
-    /* Clamp to prevent moving outside the text area */
+    /* Clamp to prevent the cursor from escaping the text area */
     int text_area_top    = TAB_BAR_HEIGHT;
-    int text_area_bottom = ed->term_rows - 2;   /* above the status bar */
+    int text_area_bottom = ed->term_rows - 2;   /* one above the status bar */
+    int min_col          = (ed->filetree_focus && ed->show_filetree && ed->filetree)
+                           ? 0
+                           : panel_w + GUTTER_WIDTH;
 
     if (screen_row < text_area_top)    screen_row = text_area_top;
     if (screen_row > text_area_bottom) screen_row = text_area_bottom;
-    if (screen_col < GUTTER_WIDTH)     screen_col = GUTTER_WIDTH;
+    if (screen_col < min_col)          screen_col = min_col;
     if (screen_col >= ed->term_cols)   screen_col = ed->term_cols - 1;
 
     move(screen_row, screen_col);

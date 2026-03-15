@@ -20,13 +20,307 @@
 #include "input.h"
 #include "editor.h"
 #include "display.h"
+#include "filetree.h"  /* for FileTree, FlatEntry, filetree_toggle, etc. */
 
-#include <stdlib.h>   /* for free() */
+#include <stdlib.h>    /* for free() */
+#include <stdio.h>     /* for fopen(), fclose() */
+#include <string.h>    /* for strrchr(), strncpy(), strncat() */
+#include <sys/stat.h>  /* for mkdir() */
+#include <unistd.h>    /* for unlink(), rmdir(), rename() */
 
 #include <ncurses.h>
 
 /* Convenience macro: CTRL('s') is the key code for Ctrl+S, etc. */
 #define CTRL(x)  ((x) & 0x1F)
+
+/* ============================================================================
+ * File-tree key handler
+ * ============================================================================ */
+
+/*
+ * input_process_filetree_key — handle one keypress while the file tree has focus.
+ *
+ * This function is called by input_process_key() when ed->filetree_focus is 1.
+ * It interprets arrow keys as tree navigation, Enter as open/expand, Escape as
+ * "return focus to editor", and letter shortcuts for file operations.
+ *
+ * C note: `static` means this function is private to this translation unit
+ * (this .c file).  It cannot be called from other files.  That is fine because
+ * it is only used by input_process_key() below.
+ */
+static void input_process_filetree_key(struct Editor *ed, int key)
+{
+    FileTree *ft  = ed->filetree;
+    int       max_idx = ft->count > 0 ? ft->count - 1 : 0;
+
+    switch (key) {
+
+        /* ---- Navigation -------------------------------------------------- */
+
+        case KEY_UP:
+            /*
+             * Move the highlight up one entry.
+             * Clamp at 0 (cannot go above the first entry).
+             */
+            if (ed->filetree_cursor > 0)
+                ed->filetree_cursor--;
+            break;
+
+        case KEY_DOWN:
+            /*
+             * Move the highlight down one entry.
+             * Clamp at max_idx (cannot go below the last entry).
+             */
+            if (ed->filetree_cursor < max_idx)
+                ed->filetree_cursor++;
+            break;
+
+        case KEY_LEFT:
+            /*
+             * Collapse an expanded directory.
+             * If the current entry is a directory AND it is expanded,
+             * toggle it (which collapses it and rebuilds the list).
+             * If the directory is already collapsed, do nothing.
+             */
+            if (ed->filetree_cursor < ft->count
+                    && ft->entries[ed->filetree_cursor].is_dir
+                    && filetree_is_expanded(ft, ft->entries[ed->filetree_cursor].path)) {
+                filetree_toggle(ft, ed->filetree_cursor);
+                /* After collapse, count shrinks; clamp cursor */
+                if (ft->count > 0 && ed->filetree_cursor >= ft->count)
+                    ed->filetree_cursor = ft->count - 1;
+            }
+            break;
+
+        case KEY_RIGHT:
+            /*
+             * Expand a collapsed directory.
+             * Only acts when the current entry is a directory that is NOT
+             * already expanded.
+             */
+            if (ed->filetree_cursor < ft->count
+                    && ft->entries[ed->filetree_cursor].is_dir
+                    && !filetree_is_expanded(ft, ft->entries[ed->filetree_cursor].path)) {
+                filetree_toggle(ft, ed->filetree_cursor);
+            }
+            break;
+
+        /* ---- Open / Expand ----------------------------------------------- */
+
+        case '\r':       /* Carriage return (some terminals) */
+        case '\n':       /* Newline */
+        case KEY_ENTER:  /* Numpad Enter */
+            if (ed->filetree_cursor >= 0 && ed->filetree_cursor < ft->count) {
+                FlatEntry *e = &ft->entries[ed->filetree_cursor];
+
+                if (e->is_dir) {
+                    /*
+                     * Enter on a directory toggles its expansion state,
+                     * just like pressing the Right or Left arrow key.
+                     */
+                    filetree_toggle(ft, ed->filetree_cursor);
+                    /* Clamp cursor in case the directory was collapsed */
+                    if (ft->count > 0 && ed->filetree_cursor >= ft->count)
+                        ed->filetree_cursor = ft->count - 1;
+                } else {
+                    /*
+                     * Enter on a file: open it in a new editor buffer and
+                     * return focus to the editor.
+                     */
+                    editor_open_file(ed, e->path);
+                    ed->filetree_focus = 0;
+                }
+            }
+            break;
+
+        /* ---- Return focus to editor -------------------------------------- */
+
+        case 27:   /* Escape */
+            ed->filetree_focus = 0;
+            break;
+
+        /* ---- File operations --------------------------------------------- */
+
+        case 'n':   /* new file */
+        {
+            /*
+             * Prompt the user for a filename, then create an empty file in
+             * the appropriate directory and open it.
+             *
+             * display_prompt() returns a heap-allocated string or NULL if the
+             * user pressed Escape.  We must free() it when done.
+             */
+            char *fname = display_prompt(ed, "New file name: ");
+            if (fname && fname[0] != '\0') {
+
+                /* Determine which directory to create the file in */
+                char dir[1024];
+                if (ed->filetree_cursor >= 0 && ed->filetree_cursor < ft->count) {
+                    FlatEntry *cur = &ft->entries[ed->filetree_cursor];
+                    if (cur->is_dir) {
+                        /* Cursor is on a dir → create inside that dir */
+                        strncpy(dir, cur->path, sizeof(dir) - 1);
+                        dir[sizeof(dir) - 1] = '\0';
+                    } else {
+                        /* Cursor is on a file → use that file's parent dir */
+                        strncpy(dir, cur->path, sizeof(dir) - 1);
+                        dir[sizeof(dir) - 1] = '\0';
+                        char *slash = strrchr(dir, '/');
+                        if (slash)
+                            *slash = '\0';
+                        else
+                            strncpy(dir, ft->root, sizeof(dir) - 1);
+                    }
+                } else {
+                    strncpy(dir, ft->root, sizeof(dir) - 1);
+                    dir[sizeof(dir) - 1] = '\0';
+                }
+
+                char newpath[1024];
+                snprintf(newpath, sizeof(newpath), "%s/%s", dir, fname);
+
+                /*
+                 * fopen(path, "w") creates an empty file (or truncates an
+                 * existing one).  We only want to create it, so we close
+                 * immediately without writing anything.
+                 */
+                FILE *f = fopen(newpath, "w");
+                if (f) {
+                    fclose(f);
+                    filetree_rebuild(ft);
+                    editor_open_file(ed, newpath);
+                    ed->filetree_focus = 0;
+                } else {
+                    editor_set_status(ed, "Could not create '%s'", fname);
+                }
+            }
+            free(fname);  /* free() is safe even if fname is NULL */
+            break;
+        }
+
+        case 'N':   /* new directory */
+        {
+            char *dname = display_prompt(ed, "New directory name: ");
+            if (dname && dname[0] != '\0') {
+
+                char dir[1024];
+                if (ed->filetree_cursor >= 0 && ed->filetree_cursor < ft->count) {
+                    FlatEntry *cur = &ft->entries[ed->filetree_cursor];
+                    if (cur->is_dir) {
+                        strncpy(dir, cur->path, sizeof(dir) - 1);
+                        dir[sizeof(dir) - 1] = '\0';
+                    } else {
+                        strncpy(dir, cur->path, sizeof(dir) - 1);
+                        dir[sizeof(dir) - 1] = '\0';
+                        char *slash = strrchr(dir, '/');
+                        if (slash)
+                            *slash = '\0';
+                        else
+                            strncpy(dir, ft->root, sizeof(dir) - 1);
+                    }
+                } else {
+                    strncpy(dir, ft->root, sizeof(dir) - 1);
+                    dir[sizeof(dir) - 1] = '\0';
+                }
+
+                char newpath[1024];
+                snprintf(newpath, sizeof(newpath), "%s/%s", dir, dname);
+
+                /*
+                 * mkdir(path, mode) creates a directory with the given
+                 * permission bits.  0755 = owner rwx, group r-x, other r-x.
+                 * Returns 0 on success, -1 on failure (errno is set).
+                 */
+                if (mkdir(newpath, 0755) == 0) {
+                    filetree_rebuild(ft);
+                } else {
+                    editor_set_status(ed, "Could not create directory '%s'", dname);
+                }
+            }
+            free(dname);
+            break;
+        }
+
+        case 'd':   /* delete */
+        {
+            if (ed->filetree_cursor >= 0 && ed->filetree_cursor < ft->count) {
+                FlatEntry *e = &ft->entries[ed->filetree_cursor];
+
+                /* Confirm before deleting */
+                char prompt[512];
+                snprintf(prompt, sizeof(prompt), "Delete '%s'? (y/n): ", e->name);
+                char *ans = display_prompt(ed, prompt);
+
+                if (ans && (ans[0] == 'y' || ans[0] == 'Y')) {
+                    /*
+                     * unlink() removes a file from the filesystem.
+                     * rmdir()  removes an EMPTY directory.
+                     * Both return 0 on success, -1 on failure.
+                     */
+                    int ok = e->is_dir ? rmdir(e->path) : unlink(e->path);
+                    if (ok == 0) {
+                        filetree_rebuild(ft);
+                        /* Clamp cursor after deletion shrinks the list */
+                        if (ft->count > 0 && ed->filetree_cursor >= ft->count)
+                            ed->filetree_cursor = ft->count - 1;
+                        if (ed->filetree_cursor < 0)
+                            ed->filetree_cursor = 0;
+                    } else {
+                        editor_set_status(ed, "Could not delete '%s'", e->name);
+                    }
+                }
+                free(ans);
+            }
+            break;
+        }
+
+        case 'r':   /* rename */
+        {
+            if (ed->filetree_cursor >= 0 && ed->filetree_cursor < ft->count) {
+                FlatEntry *e = &ft->entries[ed->filetree_cursor];
+                char *newname = display_prompt(ed, "Rename to: ");
+
+                if (newname && newname[0] != '\0') {
+                    /*
+                     * Build the new full path: same directory, new basename.
+                     * Strategy: copy e->path, find the last '/', replace the
+                     * basename after it with the new name.
+                     */
+                    char newpath[1024];
+                    strncpy(newpath, e->path, sizeof(newpath) - 1);
+                    newpath[sizeof(newpath) - 1] = '\0';
+
+                    char *slash = strrchr(newpath, '/');
+                    if (slash) {
+                        /* Truncate at the slash, then append the new name */
+                        *(slash + 1) = '\0';
+                        strncat(newpath, newname,
+                                sizeof(newpath) - strlen(newpath) - 1);
+                    } else {
+                        /* No slash: file is in current dir, just use new name */
+                        strncpy(newpath, newname, sizeof(newpath) - 1);
+                        newpath[sizeof(newpath) - 1] = '\0';
+                    }
+
+                    /*
+                     * rename(old, new) atomically renames a file or directory.
+                     * Returns 0 on success, -1 on failure.
+                     */
+                    if (rename(e->path, newpath) == 0) {
+                        filetree_rebuild(ft);
+                    } else {
+                        editor_set_status(ed, "Could not rename '%s'", e->name);
+                    }
+                }
+                free(newname);
+            }
+            break;
+        }
+
+        default:
+            break;
+    }
+}
 
 /* ============================================================================
  * Quit helper
@@ -90,6 +384,23 @@ void input_process_key(struct Editor *ed)
         /* (We can't access warn_pending from outside try_quit, but we can
          *  call try_quit with a special sentinel — instead, just clear the
          *  status message and rely on try_quit's internal state reset.) */
+    }
+
+    /*
+     * File-tree focus routing.
+     *
+     * When the file explorer panel has keyboard focus, ALL keys (except
+     * Ctrl+B which is handled by the main switch before this check) are
+     * sent to the tree handler instead of the editor.
+     *
+     * We check Ctrl+B here so the user can ALWAYS toggle the panel off,
+     * even when the tree has focus — otherwise there would be no way to
+     * close the panel without pressing Escape first.
+     */
+    if (key != CTRL('b') && ed->filetree_focus
+            && ed->show_filetree && ed->filetree) {
+        input_process_filetree_key(ed, key);
+        return;  /* Do NOT fall through to the editor key handler */
     }
 
     switch (key) {
@@ -330,6 +641,15 @@ void input_process_key(struct Editor *ed)
 
         case CTRL('q'):        /* Ctrl+Q — Quit */
             try_quit(ed);
+            break;
+
+        case CTRL('b'):        /* Ctrl+B — Toggle file explorer panel */
+            /*
+             * editor_toggle_filetree() handles all the logic:
+             *   - If panel is hidden: show it and create/rebuild the FileTree.
+             *   - If panel is visible: hide it and return focus to the editor.
+             */
+            editor_toggle_filetree(ed);
             break;
 
         /* ------------------------------------------------------------------ *

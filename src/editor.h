@@ -20,6 +20,20 @@
 #include "buffer.h"
 #include <stdarg.h>
 
+/*
+ * Forward declaration of FileTree.
+ *
+ * C requires that a type be declared before it can be used.  Because
+ * filetree.h includes editor.h (indirectly via other headers) we would get
+ * circular includes if we #include "filetree.h" here.  Instead, we tell the
+ * compiler "trust me, struct FileTree exists somewhere" — enough information
+ * for the compiler to handle a POINTER to it (struct FileTree *) without
+ * needing to know its full definition.
+ *
+ * The full definition is in filetree.h; editor.c #includes both.
+ */
+struct FileTree;
+
 /* ---- Constants ------------------------------------------------------------ */
 
 /** Maximum number of files that can be open simultaneously. */
@@ -136,6 +150,53 @@ typedef struct Editor {
     char     search_query[256];
     int      search_match_row;
     int      search_match_col;
+
+    /* ---- File explorer ---------------------------------------------------- */
+
+    /*
+     * filetree — pointer to the file explorer tree state.
+     *
+     * NULL means the tree has not been created yet (panel has never been opened).
+     * When non-NULL, the FileTree is heap-allocated and must be freed with
+     * filetree_free() in editor_cleanup().
+     *
+     * We use a pointer (not a full struct) here because FileTree is large
+     * (~2 MB) and embedding it directly in every Editor would be wasteful when
+     * the user never opens the file panel.
+     */
+    struct FileTree *filetree;
+
+    /*
+     * show_filetree — non-zero when the file explorer panel is visible.
+     *
+     * The panel occupies the left FILETREE_WIDTH columns of the screen.
+     * Toggled with Ctrl+B.
+     */
+    int      show_filetree;
+
+    /*
+     * filetree_focus — non-zero when keyboard input should go to the file tree.
+     *
+     * When 1: arrow keys move the tree cursor, Enter opens/expands items.
+     * When 0: keyboard input goes to the text editor as normal.
+     * Press Escape to return focus to the editor.
+     */
+    int      filetree_focus;
+
+    /*
+     * filetree_cursor — index into ft->entries[] of the highlighted row.
+     *
+     * This is what the user moves with Up/Down arrows while the tree has focus.
+     */
+    int      filetree_cursor;
+
+    /*
+     * filetree_scroll — index of the first entry that is visible on screen.
+     *
+     * When the user scrolls past the visible area, this value is adjusted
+     * by draw_filetree_panel() so the cursor stays in view.
+     */
+    int      filetree_scroll;
 } Editor;
 
 /* ---- Lifecycle ------------------------------------------------------------ */
@@ -422,6 +483,18 @@ void editor_undo(Editor *ed);
  * Does nothing (and shows a status message) if there is nothing to redo.
  */
 void editor_redo(Editor *ed);
+
+/* ---- File explorer ------------------------------------------------------- */
+
+/**
+ * editor_toggle_filetree — show or hide the file explorer panel (Ctrl+B).
+ *
+ * If the panel is currently hidden: shows it, gives it keyboard focus, and
+ * creates (or rebuilds) the FileTree rooted at the current buffer's directory.
+ *
+ * If the panel is currently visible: hides it and returns focus to the editor.
+ */
+void editor_toggle_filetree(Editor *ed);
 
 /* ---- Misc ----------------------------------------------------------------- */
 

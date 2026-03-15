@@ -80,6 +80,25 @@ struct Editor;
 #define CPAIR_SYN_PREPROC 16   /* Preprocessor directives: #include...   */
 #define CPAIR_SYN_NUMBER  17   /* Numeric literals: 42, 0xFF, 3.14       */
 
+/* ---- File explorer panel color pairs -------------------------------------- */
+
+/**
+ * FILETREE_WIDTH — total column width of the file explorer panel.
+ *
+ * This includes the rightmost '|' separator character.  The usable name
+ * area is (FILETREE_WIDTH - 1) characters wide.
+ */
+#define FILETREE_WIDTH         28   /* columns occupied by the tree panel      */
+
+/** CPAIR_FILETREE_DIR — directory entries shown in bold blue. */
+#define CPAIR_FILETREE_DIR    18
+
+/** CPAIR_FILETREE_FILE — regular file entries (terminal default colors). */
+#define CPAIR_FILETREE_FILE   19
+
+/** CPAIR_FILETREE_CURSOR — the currently highlighted entry (black on white). */
+#define CPAIR_FILETREE_CURSOR 20
+
 /* ---- Functions ------------------------------------------------------------ */
 
 /**

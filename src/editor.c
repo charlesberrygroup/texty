@@ -10,8 +10,9 @@
 
 #include "editor.h"
 #include "buffer.h"
-#include "display.h"    /* for GUTTER_WIDTH */
+#include "display.h"    /* for GUTTER_WIDTH, FILETREE_WIDTH */
 #include "undo.h"
+#include "filetree.h"   /* for FileTree, filetree_create, filetree_rebuild, etc. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -165,10 +166,19 @@ static int editor_rows(const Editor *ed)
  * editor_cols — how many columns are available for text content.
  *
  * We subtract the gutter width (line numbers) from the total terminal width.
+ * If the file tree panel is visible, we also subtract its width so the editor
+ * area is correctly narrowed — preventing text from being drawn under the panel.
  */
 static int editor_cols(const Editor *ed)
 {
-    return ed->term_cols - GUTTER_WIDTH;
+    /*
+     * panel_w is the width consumed by the file explorer panel.
+     * It is non-zero only when the panel is both shown AND initialised
+     * (ed->filetree != NULL).  We guard on both conditions to avoid
+     * using FILETREE_WIDTH before the panel has been created.
+     */
+    int panel_w = (ed->show_filetree && ed->filetree) ? FILETREE_WIDTH : 0;
+    return ed->term_cols - GUTTER_WIDTH - panel_w;
 }
 
 /* ============================================================================
@@ -202,6 +212,16 @@ void editor_cleanup(Editor *ed)
     /* Free the internal clipboard if one exists */
     free(ed->clipboard);
     ed->clipboard = NULL;
+
+    /*
+     * Free the file explorer tree if it was ever created.
+     * filetree_free(NULL) is defined as a no-op in filetree.c, so this is
+     * safe even if the user never opened the file panel during this session.
+     */
+    if (ed->filetree) {
+        filetree_free(ed->filetree);
+        ed->filetree = NULL;
+    }
 }
 
 /* ============================================================================
@@ -1893,4 +1913,128 @@ void editor_scroll(Editor *ed)
     if (ed->view_row > max_view_row) ed->view_row = max_view_row;
     if (ed->view_row < 0)           ed->view_row = 0;
     if (ed->view_col < 0)           ed->view_col = 0;
+}
+
+/* ============================================================================
+ * editor_toggle_filetree — show or hide the file explorer panel (Ctrl+B)
+ * ============================================================================ */
+
+/*
+ * filetree_focus_current — try to highlight the currently open file in the tree.
+ *
+ * Calls filetree_select_path() which expands parent directories as needed,
+ * rebuilds the flat list, and returns the index of the file.  If found, the
+ * filetree cursor is moved there.  If not found (e.g. the buffer is unsaved,
+ * or the file is outside the tree root), the cursor stays where it is.
+ *
+ * This is a static helper — only used inside editor_toggle_filetree().
+ */
+static void filetree_focus_current(Editor *ed)
+{
+    if (!ed->filetree) return;
+
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf || !buf->filename || buf->filename[0] == '\0') return;
+
+    int idx = filetree_select_path(ed->filetree, buf->filename);
+    if (idx >= 0) {
+        ed->filetree_cursor = idx;
+    }
+}
+
+void editor_toggle_filetree(Editor *ed)
+{
+    if (!ed->show_filetree) {
+        /*
+         * CASE 1: Panel is hidden → show it and give the tree keyboard focus.
+         *
+         * Determine the root directory for the tree.  We use the directory
+         * containing the currently open file, falling back to "." if the
+         * buffer is unsaved.
+         *
+         * dirname logic (without the non-portable dirname() function):
+         *   1. Copy the full filename into `root`.
+         *   2. Find the last '/' with strrchr().
+         *   3. Null-terminate there to strip the basename.
+         *   If there is no '/', the file is in the working directory → ".".
+         */
+        char root[1024] = ".";
+
+        Buffer *buf = editor_current_buffer(ed);
+        if (buf && buf->filename && buf->filename[0] != '\0') {
+            strncpy(root, buf->filename, sizeof(root) - 1);
+            root[sizeof(root) - 1] = '\0';
+
+            char *last_slash = strrchr(root, '/');
+            if (last_slash) {
+                if (last_slash == root)
+                    *(last_slash + 1) = '\0'; /* keep leading "/" */
+                else
+                    *last_slash = '\0';
+            } else {
+                root[0] = '.';
+                root[1] = '\0';
+            }
+        }
+
+        if (ed->filetree == NULL) {
+            ed->filetree = filetree_create(root);
+        } else {
+            filetree_rebuild(ed->filetree);
+        }
+
+        ed->show_filetree  = 1;
+        ed->filetree_focus = 1;
+
+        /* Highlight the currently open file (expands its parent dirs) */
+        filetree_focus_current(ed);
+
+        /* Clamp cursor in case the tree is empty */
+        if (ed->filetree) {
+            int max_idx = ed->filetree->count - 1;
+            if (max_idx < 0) max_idx = 0;
+            if (ed->filetree_cursor > max_idx) ed->filetree_cursor = max_idx;
+            if (ed->filetree_cursor < 0)       ed->filetree_cursor = 0;
+        }
+
+    } else if (ed->filetree_focus) {
+        /*
+         * CASE 2: Panel is visible AND the tree has keyboard focus.
+         * → Return focus to the editor, keep the panel open.
+         *
+         * This is the "press Ctrl+B while in the tree" action.
+         */
+        ed->filetree_focus = 0;
+
+    } else {
+        /*
+         * CASE 3: Panel is visible AND the editor has keyboard focus.
+         * → Give focus to the tree and highlight the currently open file.
+         *
+         * This replaces the old "second Ctrl+B closes the panel" behaviour.
+         * To close the panel, the user first presses Ctrl+B to focus the
+         * tree (this case), then Ctrl+B again to return to the editor (case 2).
+         * A third press would re-enter case 3, and so on.
+         *
+         * This three-way cycle means Ctrl+B always does something useful:
+         *   hidden  → show + focus tree
+         *   focused → unfocus (editor gets keys, panel stays)
+         *   unfocused → focus tree again (highlights current file)
+         */
+        ed->filetree_focus = 1;
+        filetree_focus_current(ed);
+
+        if (ed->filetree) {
+            int max_idx = ed->filetree->count - 1;
+            if (max_idx < 0) max_idx = 0;
+            if (ed->filetree_cursor > max_idx) ed->filetree_cursor = max_idx;
+            if (ed->filetree_cursor < 0)       ed->filetree_cursor = 0;
+        }
+    }
+
+    /*
+     * Recompute the viewport — FILETREE_WIDTH columns may have appeared or
+     * disappeared, changing the effective text width editor_cols() returns.
+     */
+    editor_scroll(ed);
 }
