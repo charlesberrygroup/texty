@@ -182,7 +182,7 @@ static void input_process_filetree_key(struct Editor *ed, int key)
                     dir[sizeof(dir) - 1] = '\0';
                 }
 
-                char newpath[1024];
+                char newpath[2048];
                 snprintf(newpath, sizeof(newpath), "%s/%s", dir, fname);
 
                 /*
@@ -229,7 +229,7 @@ static void input_process_filetree_key(struct Editor *ed, int key)
                     dir[sizeof(dir) - 1] = '\0';
                 }
 
-                char newpath[1024];
+                char newpath[2048];
                 snprintf(newpath, sizeof(newpath), "%s/%s", dir, dname);
 
                 /*
