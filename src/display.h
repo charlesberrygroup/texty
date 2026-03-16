@@ -250,4 +250,21 @@ void display_apply_theme(const void *theme_ptr);
 char *display_finder_popup(struct Editor *ed,
                            FinderFile *files, int num_files);
 
+/* ---- GUI Override Hooks ---------------------------------------------------
+ *
+ * When running in GUI mode (-G flag), gui.c installs its own implementations
+ * of display_prompt, display_finder_popup, display_apply_theme, and
+ * display_update_size via these setter functions.  This allows editor.c
+ * (which calls display_prompt/finder_popup) and input.c (which calls
+ * display_apply_theme) to work without modification in both TUI and GUI modes.
+ *
+ * When an override is installed, the original ncurses implementation is
+ * bypassed — the call is redirected to the GUI function instead.
+ * ----------------------------------------------------------------------- */
+
+void display_set_prompt_handler(char *(*fn)(struct Editor *, const char *));
+void display_set_finder_handler(char *(*fn)(struct Editor *, FinderFile *, int));
+void display_set_theme_handler(void (*fn)(const void *));
+void display_set_size_handler(void (*fn)(struct Editor *));
+
 #endif /* DISPLAY_H */

@@ -25,6 +25,39 @@
 #include <stdio.h>
 
 /* ============================================================================
+ * GUI Override Function Pointers
+ *
+ * When the GUI is active, these are set to GUI implementations via the
+ * display_set_*_handler() functions.  When NULL (default), the original
+ * ncurses implementations below are used.
+ * ============================================================================ */
+
+static char *(*s_prompt_override)(struct Editor *, const char *) = NULL;
+static char *(*s_finder_override)(struct Editor *, FinderFile *, int) = NULL;
+static void  (*s_theme_override)(const void *) = NULL;
+static void  (*s_size_override)(struct Editor *) = NULL;
+
+void display_set_prompt_handler(char *(*fn)(struct Editor *, const char *))
+{
+    s_prompt_override = fn;
+}
+
+void display_set_finder_handler(char *(*fn)(struct Editor *, FinderFile *, int))
+{
+    s_finder_override = fn;
+}
+
+void display_set_theme_handler(void (*fn)(const void *))
+{
+    s_theme_override = fn;
+}
+
+void display_set_size_handler(void (*fn)(struct Editor *))
+{
+    s_size_override = fn;
+}
+
+/* ============================================================================
  * display_init
  * ============================================================================ */
 
@@ -226,6 +259,12 @@ void display_cleanup(void)
 
 void display_apply_theme(const void *theme_ptr)
 {
+    /* If a GUI override is installed, use it instead of ncurses */
+    if (s_theme_override) {
+        s_theme_override(theme_ptr);
+        return;
+    }
+
     /*
      * theme_ptr is a const Theme* passed as void* to avoid including theme.h
      * in display.h (which would create a circular dependency).
@@ -278,6 +317,12 @@ void display_apply_theme(const void *theme_ptr)
 
 void display_update_size(struct Editor *ed)
 {
+    /* If a GUI override is installed, use it instead of ncurses */
+    if (s_size_override) {
+        s_size_override(ed);
+        return;
+    }
+
     /*
      * getmaxyx(win, y, x) fills y and x with the window dimensions.
      * Note: it is a macro, not a function — do NOT take the address of y/x.
@@ -2146,6 +2191,10 @@ void display_render(struct Editor *ed)
 
 char *display_prompt(struct Editor *ed, const char *prompt)
 {
+    /* If a GUI override is installed, use it instead of ncurses */
+    if (s_prompt_override)
+        return s_prompt_override(ed, prompt);
+
     /*
      * A small fixed buffer for the user's input.
      * 255 chars is plenty for a file path.
@@ -2203,6 +2252,10 @@ char *display_prompt(struct Editor *ed, const char *prompt)
 char *display_finder_popup(struct Editor *ed,
                            FinderFile *files, int num_files)
 {
+    /* If a GUI override is installed, use it instead of ncurses */
+    if (s_finder_override)
+        return s_finder_override(ed, files, num_files);
+
     (void)ed;  /* used only for term dimensions via LINES/COLS */
 
     /*

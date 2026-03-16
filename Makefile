@@ -55,6 +55,25 @@ endif
 # Windows (MinGW/MSYS2) would use PDCurses instead, but is not yet supported.
 
 # --------------------------------------------------------------------------
+# GUI support (SDL2 + SDL2_ttf)
+#
+# When SDL2 and SDL2_ttf are installed, the GUI frontend is compiled into
+# the binary and can be launched with `./texty -G`.  If they are not
+# installed, the build succeeds without GUI support and `-G` prints an
+# error message.
+#
+# Install on macOS:  brew install sdl2 sdl2_ttf
+# Install on Linux:  sudo apt install libsdl2-dev libsdl2-ttf-dev
+# --------------------------------------------------------------------------
+GUI_CFLAGS := $(shell pkg-config --cflags sdl2 SDL2_ttf 2>/dev/null)
+GUI_LIBS   := $(shell pkg-config --libs sdl2 SDL2_ttf 2>/dev/null)
+
+ifneq ($(GUI_LIBS),)
+    CFLAGS += $(GUI_CFLAGS) -DHAS_GUI
+    LIBS   += $(GUI_LIBS)
+endif
+
+# --------------------------------------------------------------------------
 # Source and object file lists
 # $(wildcard ...) finds all .c files; $(patsubst ...) maps them to .o paths
 # --------------------------------------------------------------------------

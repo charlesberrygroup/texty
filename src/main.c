@@ -54,12 +54,42 @@
 #include "theme.h"
 #include "lsp.h"
 
+#ifdef HAS_GUI
+#include "gui.h"
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <ncurses.h>   /* for halfdelay, getch, ERR */
 
 int main(int argc, char *argv[])
 {
+    /* ---------------------------------------------------------------------- *
+     * Check for -G flag (GUI mode)
+     *
+     * If the user runs `./texty -G`, we launch the SDL2 graphical frontend
+     * instead of the ncurses terminal UI.  The -G flag can appear anywhere
+     * in the argument list (before or after a filename).
+     * ---------------------------------------------------------------------- */
+#ifdef HAS_GUI
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-G") == 0) {
+            return gui_main(argc, argv);
+        }
+    }
+#else
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-G") == 0) {
+            fprintf(stderr, "texty: GUI mode requires SDL2 and SDL2_ttf.\n");
+            fprintf(stderr, "  Install them and rebuild:\n");
+            fprintf(stderr, "    brew install sdl2 sdl2_ttf   (macOS)\n");
+            fprintf(stderr, "    sudo apt install libsdl2-dev libsdl2-ttf-dev   (Linux)\n");
+            return EXIT_FAILURE;
+        }
+    }
+#endif
+
     /* ---------------------------------------------------------------------- *
      * 1. Initialise the editor state
      * ---------------------------------------------------------------------- */
