@@ -27,6 +27,7 @@ A terminal-based IDE written in C, built from scratch.
 - Syntax highlighting for C, C++, Python, JavaScript, TypeScript, Rust, Go, JSON, Markdown, Shell, and Makefile
 - Region highlight (Ctrl+U) — mark lines with a visible box border
 - File explorer panel (Ctrl+B) — browse, open, create, rename, and delete files
+- Fuzzy file finder (Ctrl+P) — type to filter, Enter to open, scored fuzzy matching
 - Build system integration (F5) — run build commands, parse errors, jump to error locations
 - Configurable build command via texty.json (`{"build_command": "make -j4"}`)
 - Git gutter — colored markers for added (+), modified (~), and deleted (_) lines
@@ -144,6 +145,12 @@ Produces the `./texty` binary.
 > focused → editor focused (panel visible). Opening a file that is already in
 > an open buffer switches to that buffer instead of creating a duplicate.
 
+### Navigation
+
+| Key              | Action                                          |
+|------------------|-------------------------------------------------|
+| Ctrl+P           | Fuzzy file finder (type to filter, Enter to open)|
+
 ### Build
 
 | Key              | Action                                          |
@@ -212,6 +219,7 @@ src/
   filetree.h/c  — File explorer tree logic
   git.h/c       — Git integration (gutter, blame, diff, staging, commit)
   build.h/c     — Build system (run command, parse errors, config)
+  finder.h/c    — Fuzzy file finder (directory walk, scoring, filtering)
 Makefile
 TODO.md         — Phased development roadmap
 ```

@@ -15,6 +15,7 @@
 #include "filetree.h"   /* for FileTree, filetree_create, filetree_rebuild, etc. */
 #include "git.h"        /* for git_refresh — called on open/save */
 #include "build.h"      /* for build_run, build_load_config, etc. */
+#include "finder.h"     /* for finder_collect_files, FinderFile */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -2131,6 +2132,75 @@ void editor_stage_panel_file(Editor *ed)
     } else {
         editor_set_status(ed, "Failed to stage: %s", path_copy);
     }
+}
+
+/* ============================================================================
+ * Fuzzy file finder
+ * ============================================================================ */
+
+void editor_fuzzy_find(Editor *ed)
+{
+    /*
+     * Determine the project root to scan.
+     * Same fallback chain as other features: git repo root → buffer dir → CWD.
+     */
+    char *root = get_repo_root(ed);
+    char buf_dir[2048] = "";
+
+    if (!root) {
+        Buffer *buf = editor_current_buffer(ed);
+        if (buf && buf->filename) {
+            strncpy(buf_dir, buf->filename, sizeof(buf_dir) - 1);
+            buf_dir[sizeof(buf_dir) - 1] = '\0';
+            char *slash = strrchr(buf_dir, '/');
+            if (slash) *slash = '\0';
+            else strcpy(buf_dir, ".");
+            root = strdup(buf_dir);
+        } else {
+            root = strdup(".");
+        }
+    }
+
+    if (!root) {
+        editor_set_status(ed, "Error: could not determine project root.");
+        return;
+    }
+
+    /*
+     * Collect all files in the project.
+     * This heap allocation (~16 MB) is freed at the end of this function.
+     */
+    FinderFile *files = malloc(FINDER_MAX_FILES * sizeof(FinderFile));
+    if (!files) {
+        free(root);
+        editor_set_status(ed, "Error: out of memory.");
+        return;
+    }
+
+    int num_files = finder_collect_files(root, files, FINDER_MAX_FILES);
+    free(root);
+
+    if (num_files == 0) {
+        editor_set_status(ed, "No files found in project.");
+        free(files);
+        return;
+    }
+
+    /*
+     * Show the finder popup (modal — blocks until user selects or cancels).
+     * display_finder_popup() handles its own input loop and rendering.
+     */
+    char *selected = display_finder_popup(ed, files, num_files);
+
+    if (selected) {
+        editor_open_or_switch(ed, selected);
+        free(selected);
+    }
+
+    free(files);
+
+    /* Redraw the full screen to clear the popup overlay */
+    display_render(ed);
 }
 
 /* ============================================================================

@@ -154,6 +154,23 @@ struct Editor;
 /** CPAIR_BUILD_SUCCESS — green text for "Build succeeded" header. */
 #define CPAIR_BUILD_SUCCESS 32
 
+/* ---- Fuzzy finder popup --------------------------------------------------- */
+
+/** CPAIR_FINDER_BORDER — border of the finder popup. */
+#define CPAIR_FINDER_BORDER  33
+
+/** CPAIR_FINDER_CURSOR — highlighted result row in the finder. */
+#define CPAIR_FINDER_CURSOR  34
+
+/** CPAIR_FINDER_MATCH — matched characters highlighted in result rows. */
+#define CPAIR_FINDER_MATCH   35
+
+/* Forward declaration for FinderFile (defined in finder.h).
+ * We use void* in the function signature to avoid including finder.h,
+ * then cast inside the implementation.  Actually, since display.c
+ * includes finder.h anyway, we just declare the type here. */
+#include "finder.h"
+
 /* ---- Functions ------------------------------------------------------------ */
 
 /**
@@ -200,5 +217,18 @@ void display_render(struct Editor *ed);
  * the user presses Enter, or NULL if they pressed Escape.
  */
 char *display_prompt(struct Editor *ed, const char *prompt);
+
+/**
+ * display_finder_popup — show the fuzzy file finder popup.
+ *
+ * Renders a centered popup overlay with an input field and filtered
+ * file list.  Handles its own input loop (modal — blocks until the
+ * user selects a file or presses Escape).
+ *
+ * Returns a heap-allocated absolute file path (caller must free),
+ * or NULL if the user cancelled with Escape.
+ */
+char *display_finder_popup(struct Editor *ed,
+                           FinderFile *files, int num_files);
 
 #endif /* DISPLAY_H */

@@ -114,7 +114,7 @@ that all future phases will build on.
 - [x] Configurable build command per project (texty.json)
 
 ### Navigation & Search
-- [ ] Fuzzy file finder (Ctrl+P)
+- [x] Fuzzy file finder (Ctrl+P)
 - [ ] Go-to-symbol in file (Ctrl+Shift+O)
 - [ ] Go-to-symbol in workspace (Ctrl+T)
 - [ ] Command palette (Ctrl+Shift+P)

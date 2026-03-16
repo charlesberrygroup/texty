@@ -16,8 +16,10 @@
 #include "filetree.h"   /* for FileTree, FlatEntry, filetree_is_expanded */
 #include "git.h"        /* for GitLineStatus, GitState */
 #include "build.h"      /* for BuildResult, BuildError */
+#include "finder.h"     /* for FinderFile, FinderResult, finder_filter, etc. */
 
 #include <ncurses.h>
+#include <stdlib.h>    /* for malloc, free — used by display_finder_popup */
 #include <string.h>
 #include <stdio.h>
 
@@ -178,6 +180,11 @@ void display_init(void)
         init_pair(CPAIR_BUILD_WARNING, COLOR_YELLOW, -1);
         init_pair(CPAIR_BUILD_CURSOR,  COLOR_BLACK, COLOR_WHITE);
         init_pair(CPAIR_BUILD_SUCCESS, COLOR_GREEN,  -1);
+
+        /* Fuzzy finder popup */
+        init_pair(CPAIR_FINDER_BORDER, COLOR_CYAN,  -1);
+        init_pair(CPAIR_FINDER_CURSOR, COLOR_BLACK, COLOR_WHITE);
+        init_pair(CPAIR_FINDER_MATCH,  COLOR_GREEN, -1);
 
         /* Staged files in the git status panel: green (matches git CLI) */
         init_pair(CPAIR_GIT_STAGED, COLOR_GREEN, -1);
@@ -2042,6 +2049,209 @@ char *display_prompt(struct Editor *ed, const char *prompt)
             /* Printable character — append it */
             input[len++] = (char)key;
             input[len]   = '\0';
+        }
+    }
+}
+
+/* ============================================================================
+ * display_finder_popup — fuzzy file finder overlay
+ * ============================================================================ */
+
+char *display_finder_popup(struct Editor *ed,
+                           FinderFile *files, int num_files)
+{
+    (void)ed;  /* used only for term dimensions via LINES/COLS */
+
+    /*
+     * Popup dimensions: centered on screen, reasonable defaults.
+     * Width:  min(COLS - 4, 80)    — most of the screen width
+     * Height: min(LINES - 4, 20)   — enough for a good result list
+     */
+    int popup_w = COLS - 4;
+    if (popup_w > 80) popup_w = 80;
+    if (popup_w < 20) popup_w = 20;
+
+    int popup_h = LINES - 4;
+    if (popup_h > 20) popup_h = 20;
+    if (popup_h < 5)  popup_h = 5;
+
+    int popup_x = (COLS - popup_w) / 2;
+    int popup_y = (LINES - popup_h) / 2;
+
+    /* Number of result rows (popup height minus border rows and input row) */
+    int result_rows = popup_h - 3;  /* top border + input row + bottom border */
+    if (result_rows < 1) result_rows = 1;
+
+    /* Query and results state */
+    char query[FINDER_QUERY_MAX];
+    query[0] = '\0';
+    int query_len = 0;
+
+    FinderResult *results = malloc(FINDER_MAX_RESULTS * sizeof(FinderResult));
+    if (!results) return NULL;
+
+    int num_results = 0;
+    int cursor = 0;
+    int scroll = 0;
+
+    /* Initial filter (empty query → show all files) */
+    num_results = finder_filter(files, num_files, query,
+                                results, FINDER_MAX_RESULTS);
+
+    for (;;) {
+        /*
+         * ---- Draw the popup ----
+         *
+         * We draw directly onto stdscr as an overlay.  When the popup
+         * closes, the caller calls display_render() to redraw everything.
+         */
+
+        /* Inner width available for text (popup_w minus 2 border columns) */
+        int inner_w = popup_w - 2;
+        if (inner_w < 1) inner_w = 1;
+
+        /* ---- Top border ---- */
+        attron(COLOR_PAIR(CPAIR_FINDER_BORDER));
+        mvaddch(popup_y, popup_x, ACS_ULCORNER);
+        mvhline(popup_y, popup_x + 1, ACS_HLINE, popup_w - 2);
+        mvaddch(popup_y, popup_x + popup_w - 1, ACS_URCORNER);
+
+        /* Title in the border */
+        mvprintw(popup_y, popup_x + 2, " Find File ");
+        attroff(COLOR_PAIR(CPAIR_FINDER_BORDER));
+
+        /* ---- Input row ---- */
+        int input_row = popup_y + 1;
+        attron(COLOR_PAIR(CPAIR_FINDER_BORDER));
+        mvaddch(input_row, popup_x, ACS_VLINE);
+        mvaddch(input_row, popup_x + popup_w - 1, ACS_VLINE);
+        attroff(COLOR_PAIR(CPAIR_FINDER_BORDER));
+
+        /* Draw the query input: "> query_text" */
+        move(input_row, popup_x + 1);
+        attron(A_BOLD);
+        printw("> ");
+        attroff(A_BOLD);
+        printw("%-*.*s", inner_w - 2, inner_w - 2, query);
+
+        /* ---- Result rows ---- */
+        /* Scroll to keep cursor visible */
+        if (cursor < scroll) scroll = cursor;
+        if (cursor >= scroll + result_rows)
+            scroll = cursor - result_rows + 1;
+        if (scroll < 0) scroll = 0;
+
+        for (int r = 0; r < result_rows; r++) {
+            int screen_row = popup_y + 2 + r;
+            int idx = scroll + r;
+
+            /* Left border */
+            attron(COLOR_PAIR(CPAIR_FINDER_BORDER));
+            mvaddch(screen_row, popup_x, ACS_VLINE);
+            mvaddch(screen_row, popup_x + popup_w - 1, ACS_VLINE);
+            attroff(COLOR_PAIR(CPAIR_FINDER_BORDER));
+
+            move(screen_row, popup_x + 1);
+
+            if (idx >= num_results) {
+                /* Blank row */
+                printw("%*s", inner_w, "");
+                continue;
+            }
+
+            /* Get the display text for this result */
+            const char *disp = files[results[idx].index].display;
+            int disp_len = (int)strlen(disp);
+
+            /* Truncate to fit */
+            int show_len = disp_len;
+            if (show_len > inner_w) show_len = inner_w;
+
+            int is_cursor_row = (idx == cursor);
+
+            if (is_cursor_row) {
+                attron(COLOR_PAIR(CPAIR_FINDER_CURSOR) | A_BOLD);
+                printw(" %-*.*s", inner_w - 1, inner_w - 1, disp);
+                attroff(COLOR_PAIR(CPAIR_FINDER_CURSOR) | A_BOLD);
+            } else {
+                printw(" %-*.*s", inner_w - 1, inner_w - 1, disp);
+            }
+        }
+
+        /* ---- Bottom border ---- */
+        int bottom_row = popup_y + popup_h - 1;
+        attron(COLOR_PAIR(CPAIR_FINDER_BORDER));
+        mvaddch(bottom_row, popup_x, ACS_LLCORNER);
+        mvhline(bottom_row, popup_x + 1, ACS_HLINE, popup_w - 2);
+        mvaddch(bottom_row, popup_x + popup_w - 1, ACS_LRCORNER);
+
+        /* Result count in the bottom border */
+        char count_str[32];
+        snprintf(count_str, sizeof(count_str), " %d/%d ", num_results, num_files);
+        mvprintw(bottom_row, popup_x + popup_w - 2 - (int)strlen(count_str),
+                 "%s", count_str);
+        attroff(COLOR_PAIR(CPAIR_FINDER_BORDER));
+
+        /* Position the cursor at the end of the query text */
+        move(input_row, popup_x + 3 + query_len);
+        refresh();
+
+        /* ---- Handle input ---- */
+        int key = getch();
+
+        if (key == 27) {
+            /* Escape — cancel */
+            free(results);
+            return NULL;
+
+        } else if (key == '\n' || key == '\r' || key == KEY_ENTER) {
+            /* Enter — select the current result */
+            if (num_results > 0 && cursor >= 0 && cursor < num_results) {
+                char *selected = strdup(files[results[cursor].index].path);
+                free(results);
+                return selected;
+            }
+            /* No results — ignore Enter */
+
+        } else if (key == KEY_UP) {
+            if (cursor > 0) cursor--;
+
+        } else if (key == KEY_DOWN) {
+            if (cursor < num_results - 1) cursor++;
+
+        } else if (key == KEY_BACKSPACE || key == 127 || key == '\b') {
+            /* Backspace — remove last character from query */
+            if (query_len > 0) {
+                query[--query_len] = '\0';
+                cursor = 0;
+                scroll = 0;
+                num_results = finder_filter(files, num_files, query,
+                                            results, FINDER_MAX_RESULTS);
+            }
+
+        } else if (key == KEY_RESIZE) {
+            /* Terminal resized — recalculate popup dimensions */
+            popup_w = COLS - 4;
+            if (popup_w > 80) popup_w = 80;
+            if (popup_w < 20) popup_w = 20;
+            popup_h = LINES - 4;
+            if (popup_h > 20) popup_h = 20;
+            if (popup_h < 5)  popup_h = 5;
+            popup_x = (COLS - popup_w) / 2;
+            popup_y = (LINES - popup_h) / 2;
+            result_rows = popup_h - 3;
+            if (result_rows < 1) result_rows = 1;
+            erase();  /* clear the whole screen for redraw */
+
+        } else if (key >= 0x20 && key <= 0x7e
+                   && query_len < FINDER_QUERY_MAX - 1) {
+            /* Printable character — append to query and re-filter */
+            query[query_len++] = (char)key;
+            query[query_len]   = '\0';
+            cursor = 0;
+            scroll = 0;
+            num_results = finder_filter(files, num_files, query,
+                                        results, FINDER_MAX_RESULTS);
         }
     }
 }

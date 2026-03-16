@@ -10,6 +10,7 @@
  */
 
 #include "display.h"
+#include "finder.h"   /* for FinderFile type — used by display_finder_popup stub */
 #include <stdlib.h>   /* NULL */
 
 /*
@@ -43,4 +44,17 @@ void display_render(struct Editor *ed)
 void display_update_size(struct Editor *ed)
 {
     (void)ed;
+}
+
+/*
+ * display_finder_popup — no-op in tests (no ncurses popup).
+ *
+ * editor_fuzzy_find() calls this.  In tests, it returns NULL (user cancelled).
+ */
+char *display_finder_popup(struct Editor *ed, FinderFile *files, int num_files)
+{
+    (void)ed;
+    (void)files;
+    (void)num_files;
+    return NULL;
 }

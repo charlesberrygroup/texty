@@ -657,6 +657,17 @@ void editor_stage_file(Editor *ed);
  */
 void editor_stage_panel_file(Editor *ed);
 
+/* ---- Fuzzy file finder ---------------------------------------------------- */
+
+/**
+ * editor_fuzzy_find — open the fuzzy file finder popup (Ctrl+P).
+ *
+ * Collects all files in the project, shows the finder popup, and opens
+ * the selected file.  The popup is modal — it blocks until the user
+ * selects a file or presses Escape.
+ */
+void editor_fuzzy_find(Editor *ed);
+
 /* ---- Build system --------------------------------------------------------- */
 
 /**

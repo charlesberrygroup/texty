@@ -853,6 +853,10 @@ void input_process_key(struct Editor *ed)
             editor_toggle_git_blame(ed);
             break;
 
+        case CTRL('p'):        /* Ctrl+P — Fuzzy file finder */
+            editor_fuzzy_find(ed);
+            break;
+
         case CTRL('b'):        /* Ctrl+B — Toggle file explorer panel */
             /*
              * editor_toggle_filetree() handles all the logic:
