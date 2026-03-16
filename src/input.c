@@ -857,6 +857,10 @@ void input_process_key(struct Editor *ed)
             editor_fuzzy_find(ed);
             break;
 
+        case CTRL('e'):        /* Ctrl+E — Recent files */
+            editor_recent_files(ed);
+            break;
+
         case CTRL('b'):        /* Ctrl+B — Toggle file explorer panel */
             /*
              * editor_toggle_filetree() handles all the logic:

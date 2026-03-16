@@ -61,6 +61,17 @@ void display_init(void)
     nodelay(stdscr, FALSE);
 
     /*
+     * ESCDELAY controls how long ncurses waits after receiving an ESC byte
+     * (0x1B) to determine whether it's a standalone Escape keypress or
+     * the start of a multi-byte escape sequence (like an arrow key).
+     *
+     * The default is often 1000ms, which makes Escape feel sluggish.
+     * 25ms is fast enough to feel instant but long enough for terminal
+     * escape sequences to arrive (they typically take < 5ms).
+     */
+    set_escdelay(25);
+
+    /*
      * Set up colors.  has_colors() returns true if the terminal supports color.
      */
     if (has_colors()) {

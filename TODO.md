@@ -118,7 +118,7 @@ that all future phases will build on.
 - [ ] Go-to-symbol in file (Ctrl+Shift+O)
 - [ ] Go-to-symbol in workspace (Ctrl+T)
 - [ ] Command palette (Ctrl+Shift+P)
-- [ ] Recent files list
+- [x] Recent files list (Ctrl+E)
 
 ### Configuration & Extensibility
 - [ ] Config file (~/.config/texty/config.toml)

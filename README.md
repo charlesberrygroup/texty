@@ -28,6 +28,7 @@ A terminal-based IDE written in C, built from scratch.
 - Region highlight (Ctrl+U) — mark lines with a visible box border
 - File explorer panel (Ctrl+B) — browse, open, create, rename, and delete files
 - Fuzzy file finder (Ctrl+P) — type to filter, Enter to open, scored fuzzy matching
+- Recent files (Ctrl+E) — quick-pick from recently opened files, persisted across sessions
 - Build system integration (F5) — run build commands, parse errors, jump to error locations
 - Configurable build command via texty.json (`{"build_command": "make -j4"}`)
 - Git gutter — colored markers for added (+), modified (~), and deleted (_) lines
@@ -150,6 +151,7 @@ Produces the `./texty` binary.
 | Key              | Action                                          |
 |------------------|-------------------------------------------------|
 | Ctrl+P           | Fuzzy file finder (type to filter, Enter to open)|
+| Ctrl+E           | Recent files (quick-pick from recently opened)   |
 
 ### Build
 

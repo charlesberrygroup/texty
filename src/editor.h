@@ -43,6 +43,9 @@ struct FileTree;
 /** Maximum length of the status message string. */
 #define STATUS_MSG_LEN      256
 
+/** Maximum number of entries in the recent files list. */
+#define RECENT_FILES_MAX    64
+
 /* ---- Data Types ----------------------------------------------------------- */
 
 /**
@@ -306,6 +309,18 @@ typedef struct Editor {
      * Empty string means "not yet loaded".
      */
     char     build_command[BUILD_CMD_MAX];
+
+    /* ---- Recent files ----------------------------------------------------- */
+
+    /*
+     * recent_files — list of recently opened file paths, most recent first.
+     *
+     * Updated every time a file is opened (editor_open_file / open_or_switch).
+     * Persisted to ~/.config/texty/recent_files on save and loaded at startup.
+     * Used by editor_recent_files() (Ctrl+E) to show a quick-pick list.
+     */
+    char    *recent_files[RECENT_FILES_MAX];
+    int      recent_count;
 } Editor;
 
 /* ---- Lifecycle ------------------------------------------------------------ */
@@ -656,6 +671,41 @@ void editor_stage_file(Editor *ed);
  * Stages the highlighted entry and refreshes the panel.
  */
 void editor_stage_panel_file(Editor *ed);
+
+/* ---- Recent files --------------------------------------------------------- */
+
+/**
+ * editor_recent_files — show the recent files picker (Ctrl+E).
+ *
+ * Displays a popup with the most recently opened files.  The user can
+ * type to filter, use Up/Down to navigate, and Enter to open a file.
+ * Reuses the same fuzzy finder popup UI.
+ */
+void editor_recent_files(Editor *ed);
+
+/**
+ * editor_recent_add — add a file path to the recent files list.
+ *
+ * Moves `path` to the front of the list if it's already present,
+ * or inserts it at the front (shifting others down).  Called internally
+ * by editor_open_file and editor_open_or_switch.
+ */
+void editor_recent_add(Editor *ed, const char *path);
+
+/**
+ * editor_recent_load — load the recent files list from disk.
+ *
+ * Reads from ~/.config/texty/recent_files.  Called at startup.
+ */
+void editor_recent_load(Editor *ed);
+
+/**
+ * editor_recent_save — persist the recent files list to disk.
+ *
+ * Writes to ~/.config/texty/recent_files.  Called on quit and after
+ * opening a file.
+ */
+void editor_recent_save(Editor *ed);
 
 /* ---- Fuzzy file finder ---------------------------------------------------- */
 

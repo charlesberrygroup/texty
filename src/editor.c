@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <sys/stat.h>  /* for mkdir — used by recent_files_path */
 
 /* ============================================================================
  * Internal helpers
@@ -232,6 +233,10 @@ void editor_init(Editor *ed)
     ed->search_match_row = -1;
     ed->search_match_col = -1;
     ed->tab_width        = 4;   /* default: 4 spaces per Tab */
+
+    /* Load recent files from disk */
+    editor_recent_load(ed);
+
     /* editor_new_buffer will be called by the caller (main.c) */
 }
 
@@ -279,6 +284,12 @@ void editor_cleanup(Editor *ed)
         free(ed->build_result);
         ed->build_result = NULL;
     }
+
+    /* Save and free recent files list */
+    editor_recent_save(ed);
+    for (int i = 0; i < ed->recent_count; i++)
+        free(ed->recent_files[i]);
+    ed->recent_count = 0;
 }
 
 /* ============================================================================
@@ -387,8 +398,10 @@ int editor_open_file(Editor *ed, const char *path)
     editor_selection_clear(ed);
 
     /* Detect git repo and populate line change markers */
-    if (buf->filename)
+    if (buf->filename) {
         git_refresh(&buf->git_state, buf->filename, buf->num_lines);
+        editor_recent_add(ed, buf->filename);
+    }
 
     return 0;
 }
@@ -408,6 +421,7 @@ int editor_open_or_switch(Editor *ed, const char *path)
             ed->current_buffer = i;
             restore_cursor_from_buffer(ed);
             editor_selection_clear(ed);
+            editor_recent_add(ed, path);
             editor_set_status(ed, "Switched to existing buffer");
             return 0;
         }
@@ -2132,6 +2146,183 @@ void editor_stage_panel_file(Editor *ed)
     } else {
         editor_set_status(ed, "Failed to stage: %s", path_copy);
     }
+}
+
+/* ============================================================================
+ * Recent files
+ * ============================================================================ */
+
+void editor_recent_add(Editor *ed, const char *path)
+{
+    if (!path || path[0] == '\0') return;
+
+    /*
+     * If the path is already in the list, remove it from its current
+     * position so we can re-insert it at the front (most recent first).
+     */
+    int existing = -1;
+    for (int i = 0; i < ed->recent_count; i++) {
+        if (ed->recent_files[i] && strcmp(ed->recent_files[i], path) == 0) {
+            existing = i;
+            break;
+        }
+    }
+
+    if (existing >= 0) {
+        /* Move to front: free the slot, shift entries down */
+        char *saved = ed->recent_files[existing];
+        for (int i = existing; i > 0; i--)
+            ed->recent_files[i] = ed->recent_files[i - 1];
+        ed->recent_files[0] = saved;
+        return;
+    }
+
+    /*
+     * Not in the list — insert at front.
+     * If the list is full, free the last entry.
+     */
+    if (ed->recent_count >= RECENT_FILES_MAX) {
+        free(ed->recent_files[RECENT_FILES_MAX - 1]);
+        ed->recent_count = RECENT_FILES_MAX - 1;
+    }
+
+    /* Shift all entries down by one */
+    for (int i = ed->recent_count; i > 0; i--)
+        ed->recent_files[i] = ed->recent_files[i - 1];
+
+    ed->recent_files[0] = strdup(path);
+    ed->recent_count++;
+}
+
+/*
+ * recent_files_path — get the path to the recent files persistence file.
+ *
+ * Returns a heap-allocated path to ~/.config/texty/recent_files,
+ * creating the directory if needed.  Returns NULL on failure.
+ */
+static char *recent_files_path(void)
+{
+    const char *home = getenv("HOME");
+    if (!home) return NULL;
+
+    char dir[1024];
+    snprintf(dir, sizeof(dir), "%s/.config/texty", home);
+
+    /* Create directory if it doesn't exist (mkdir -p equivalent) */
+    char parent[1024];
+    snprintf(parent, sizeof(parent), "%s/.config", home);
+    mkdir(parent, 0755);  /* ignore error if exists */
+    mkdir(dir, 0755);     /* ignore error if exists */
+
+    char *path = malloc(1024);
+    if (!path) return NULL;
+    snprintf(path, 1024, "%s/recent_files", dir);
+    return path;
+}
+
+void editor_recent_load(Editor *ed)
+{
+    char *path = recent_files_path();
+    if (!path) return;
+
+    FILE *fp = fopen(path, "r");
+    free(path);
+    if (!fp) return;
+
+    /*
+     * Each line in the file is an absolute file path.
+     * Read up to RECENT_FILES_MAX lines.
+     */
+    char line[1024];
+    while (ed->recent_count < RECENT_FILES_MAX
+           && fgets(line, sizeof(line), fp)) {
+        /* Strip trailing newline */
+        int len = (int)strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+            line[--len] = '\0';
+
+        if (len > 0)
+            ed->recent_files[ed->recent_count++] = strdup(line);
+    }
+
+    fclose(fp);
+}
+
+void editor_recent_save(Editor *ed)
+{
+    char *path = recent_files_path();
+    if (!path) return;
+
+    FILE *fp = fopen(path, "w");
+    free(path);
+    if (!fp) return;
+
+    for (int i = 0; i < ed->recent_count; i++) {
+        if (ed->recent_files[i])
+            fprintf(fp, "%s\n", ed->recent_files[i]);
+    }
+
+    fclose(fp);
+}
+
+void editor_recent_files(Editor *ed)
+{
+    if (ed->recent_count == 0) {
+        editor_set_status(ed, "No recent files.");
+        return;
+    }
+
+    /*
+     * Build a FinderFile array from the recent list so we can reuse
+     * the finder popup UI.  The display path is the basename or a
+     * shortened path for readability.
+     */
+    FinderFile *files = malloc(ed->recent_count * sizeof(FinderFile));
+    if (!files) return;
+
+    int count = 0;
+    for (int i = 0; i < ed->recent_count; i++) {
+        if (!ed->recent_files[i]) continue;
+
+        FinderFile *f = &files[count];
+        strncpy(f->path, ed->recent_files[i], sizeof(f->path) - 1);
+        f->path[sizeof(f->path) - 1] = '\0';
+
+        /*
+         * For display, use the filename portion or a short relative-ish path.
+         * We try to show the last 2 path components for context.
+         */
+        const char *disp = ed->recent_files[i];
+        /* Find the second-to-last '/' */
+        const char *slash = strrchr(disp, '/');
+        if (slash && slash > disp) {
+            const char *prev = slash - 1;
+            while (prev > disp && *prev != '/') prev--;
+            if (*prev == '/') prev++;
+            disp = prev;
+        }
+        strncpy(f->display, disp, sizeof(f->display) - 1);
+        f->display[sizeof(f->display) - 1] = '\0';
+
+        count++;
+    }
+
+    if (count == 0) {
+        free(files);
+        editor_set_status(ed, "No recent files.");
+        return;
+    }
+
+    /* Show the picker popup (reuses the fuzzy finder UI) */
+    char *selected = display_finder_popup(ed, files, count);
+
+    if (selected) {
+        editor_open_or_switch(ed, selected);
+        free(selected);
+    }
+
+    free(files);
+    display_render(ed);
 }
 
 /* ============================================================================

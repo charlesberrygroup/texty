@@ -18,6 +18,8 @@
 #include "buffer.h"
 
 #include <string.h>   /* strcmp */
+#include <stdlib.h>   /* free — used by recent files tests */
+#include <stdio.h>    /* snprintf */
 
 /* ============================================================================
  * Helper — fresh editor ready for testing
@@ -911,6 +913,108 @@ TEST(test_select_down_at_bottom_does_nothing)
 }
 
 /* ============================================================================
+ * Recent files
+ * ============================================================================ */
+
+/*
+ * Helper: initialize an Editor for recent-files tests WITHOUT loading
+ * from disk or saving on cleanup.  We zero the struct manually and only
+ * set the fields we need.  This prevents tests from reading/writing
+ * the user's real ~/.config/texty/recent_files.
+ */
+static void init_editor_no_disk(Editor *ed)
+{
+    memset(ed, 0, sizeof(Editor));
+    ed->search_match_row = -1;
+    ed->search_match_col = -1;
+    ed->tab_width        = 4;
+    /* Deliberately skip editor_recent_load */
+}
+
+static void cleanup_editor_no_disk(Editor *ed)
+{
+    /* Free buffers */
+    for (int i = 0; i < ed->num_buffers; i++) {
+        if (ed->buffers[i]) {
+            buffer_destroy(ed->buffers[i]);
+            ed->buffers[i] = NULL;
+        }
+    }
+    /* Free recent files WITHOUT saving to disk */
+    for (int i = 0; i < ed->recent_count; i++)
+        free(ed->recent_files[i]);
+    ed->recent_count = 0;
+    /* Free clipboard */
+    free(ed->clipboard);
+    ed->clipboard = NULL;
+}
+
+TEST(test_recent_add_basic)
+{
+    Editor ed;
+    init_editor_no_disk(&ed);
+    editor_new_buffer(&ed);
+
+    editor_recent_add(&ed, "/home/user/file1.c");
+    editor_recent_add(&ed, "/home/user/file2.c");
+
+    ASSERT(ed.recent_count == 2, "two recent files");
+    ASSERT(strcmp(ed.recent_files[0], "/home/user/file2.c") == 0,
+           "most recent is first");
+    ASSERT(strcmp(ed.recent_files[1], "/home/user/file1.c") == 0,
+           "older is second");
+
+    cleanup_editor_no_disk(&ed);
+}
+
+TEST(test_recent_add_move_to_front)
+{
+    Editor ed;
+    init_editor_no_disk(&ed);
+    editor_new_buffer(&ed);
+
+    editor_recent_add(&ed, "/a.c");
+    editor_recent_add(&ed, "/b.c");
+    editor_recent_add(&ed, "/c.c");
+
+    /* Re-add /a.c — should move to front */
+    editor_recent_add(&ed, "/a.c");
+
+    ASSERT(ed.recent_count == 3, "still 3 entries (no duplicate)");
+    ASSERT(strcmp(ed.recent_files[0], "/a.c") == 0,
+           "re-added file moved to front");
+    ASSERT(strcmp(ed.recent_files[1], "/c.c") == 0,
+           "c.c shifted to position 1");
+    ASSERT(strcmp(ed.recent_files[2], "/b.c") == 0,
+           "b.c shifted to position 2");
+
+    cleanup_editor_no_disk(&ed);
+}
+
+TEST(test_recent_add_full_list)
+{
+    Editor ed;
+    init_editor_no_disk(&ed);
+    editor_new_buffer(&ed);
+
+    /* Fill the list to capacity */
+    for (int i = 0; i < RECENT_FILES_MAX; i++) {
+        char path[64];
+        snprintf(path, sizeof(path), "/file%d.c", i);
+        editor_recent_add(&ed, path);
+    }
+    ASSERT(ed.recent_count == RECENT_FILES_MAX, "list full");
+
+    /* Adding one more should drop the oldest */
+    editor_recent_add(&ed, "/newest.c");
+    ASSERT(ed.recent_count == RECENT_FILES_MAX, "still at max");
+    ASSERT(strcmp(ed.recent_files[0], "/newest.c") == 0,
+           "newest is first");
+
+    cleanup_editor_no_disk(&ed);
+}
+
+/* ============================================================================
  * main
  * ============================================================================ */
 
@@ -980,6 +1084,11 @@ int main(void)
     RUN(test_select_down_extends_existing_selection);
     RUN(test_select_up_at_top_does_nothing);
     RUN(test_select_down_at_bottom_does_nothing);
+
+    /* Recent files */
+    RUN(test_recent_add_basic);
+    RUN(test_recent_add_move_to_front);
+    RUN(test_recent_add_full_list);
 
     TEST_SUMMARY();
 }
