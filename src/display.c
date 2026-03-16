@@ -1928,51 +1928,49 @@ static void draw_status_bar(struct Editor *ed)
      * when status_msg is empty.  This gives new users a clue about how to
      * save and quit.
      */
-    if (ed->status_msg[0] == '\0') {
-        /*
-         * If the cursor is on a line with an LSP diagnostic, show the
-         * diagnostic message instead of the default hint.  This gives
-         * the user immediate feedback about errors without needing a
-         * separate panel.
-         */
-        const char *diag_msg = NULL;
-        int diag_sev = 0;
-        if (buf->lsp_diagnostics.count > 0) {
-            for (int i = 0; i < buf->lsp_diagnostics.count; i++) {
-                if (buf->lsp_diagnostics.items[i].line == ed->cursor_row) {
-                    diag_msg = buf->lsp_diagnostics.items[i].message;
-                    diag_sev = buf->lsp_diagnostics.items[i].severity;
-                    break;  /* show the first diagnostic on this line */
-                }
+    /*
+     * Status bar center content — priority order:
+     *   1. LSP diagnostic on the cursor line (always wins — most actionable)
+     *   2. Explicit status message (from editor_set_status)
+     *   3. Default key hint
+     */
+    const char *diag_msg = NULL;
+    int diag_sev = 0;
+    if (buf->lsp_diagnostics.count > 0) {
+        for (int i = 0; i < buf->lsp_diagnostics.count; i++) {
+            if (buf->lsp_diagnostics.items[i].line == ed->cursor_row) {
+                diag_msg = buf->lsp_diagnostics.items[i].message;
+                diag_sev = buf->lsp_diagnostics.items[i].severity;
+                break;
             }
         }
+    }
 
-        if (diag_msg && diag_msg[0]) {
-            /* Show diagnostic message in the center with error/warning color */
-            int diag_cpair = (diag_sev == LSP_SEV_ERROR)
-                             ? CPAIR_LSP_ERROR : CPAIR_LSP_WARNING;
-            int msg_col = (ed->term_cols - (int)strlen(diag_msg)) / 2;
-            if (msg_col < (int)strlen(left) + 1) msg_col = (int)strlen(left) + 1;
-            attron(COLOR_PAIR(diag_cpair) | A_BOLD);
-            mvprintw(status_row, msg_col, "%.80s", diag_msg);
-            attroff(COLOR_PAIR(diag_cpair) | A_BOLD);
-        } else {
-            /* Overwrite the centre of the status bar with hint text */
-            const char *hint = "Ctrl+S save  Ctrl+Q quit";
-            int hint_col = (ed->term_cols - (int)strlen(hint)) / 2;
-            if (hint_col > (int)strlen(left) && hint_col > 0) {
-                attron(COLOR_PAIR(color));
-                mvprintw(status_row, hint_col, "%s", hint);
-                attroff(COLOR_PAIR(color));
-            }
-        }
-    } else {
-        /* Show the status message in the centre */
+    if (diag_msg && diag_msg[0]) {
+        /* LSP diagnostic on cursor line — show in error/warning color */
+        int diag_cpair = (diag_sev == LSP_SEV_ERROR)
+                         ? CPAIR_LSP_ERROR : CPAIR_LSP_WARNING;
+        int msg_col = (ed->term_cols - (int)strlen(diag_msg)) / 2;
+        if (msg_col < (int)strlen(left) + 1) msg_col = (int)strlen(left) + 1;
+        attron(COLOR_PAIR(diag_cpair) | A_BOLD);
+        mvprintw(status_row, msg_col, "%.80s", diag_msg);
+        attroff(COLOR_PAIR(diag_cpair) | A_BOLD);
+    } else if (ed->status_msg[0] != '\0') {
+        /* Explicit status message */
         int msg_col = (ed->term_cols - (int)strlen(ed->status_msg)) / 2;
         if (msg_col < 0) msg_col = 0;
         attron(COLOR_PAIR(color) | A_BOLD);
         mvprintw(status_row, msg_col, "%.80s", ed->status_msg);
         attroff(COLOR_PAIR(color) | A_BOLD);
+    } else {
+        /* Default hint */
+        const char *hint = "Ctrl+S save  Ctrl+Q quit";
+        int hint_col = (ed->term_cols - (int)strlen(hint)) / 2;
+        if (hint_col > (int)strlen(left) && hint_col > 0) {
+            attron(COLOR_PAIR(color));
+            mvprintw(status_row, hint_col, "%s", hint);
+            attroff(COLOR_PAIR(color));
+        }
     }
 }
 

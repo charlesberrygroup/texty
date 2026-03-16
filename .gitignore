@@ -4,3 +4,5 @@ obj/
 
 # macOS
 .DS_Store
+
+.cache/*
