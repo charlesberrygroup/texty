@@ -4,43 +4,49 @@ A terminal-based IDE written in C, built from scratch.
 
 ## Features
 
+### Editor
 - Open and edit files from the command line
-- Insert, delete, and newline editing
-- Undo / redo (Ctrl+Z / Ctrl+Y) with per-buffer history
-- Visual selection with Shift+Arrow keys
-- Copy, cut, and paste (Ctrl+C / Ctrl+X / Ctrl+V)
-- Multiple open buffers with a tab bar (Ctrl+N / Ctrl+O / Ctrl+W)
-- Search and replace (Ctrl+F / F3 / Shift+F3 / Ctrl+R)
-- Auto-indent on newline (matches current line's indentation)
-- Tab key inserts 4 spaces (single undo step)
-- Auto-close brackets and quotes — `(`, `[`, `{`, `"`, `'` insert the matching closing character
+- Undo / redo with per-buffer history
+- Visual selection, copy, cut, paste
+- Multiple open buffers with a tab bar
+- Search and replace
+- Auto-indent, tab→spaces, auto-close brackets/quotes
+- Bracket matching highlight
+- Show/hide whitespace, word wrap toggle
+- Syntax highlighting for C, C++, Python, JS/TS, Rust, Go, JSON, Markdown, Shell, Makefile
+- Region highlight — mark lines with a visible box border
+
+### File Management
+- File explorer panel — browse, open, create, rename, delete files
+- Fuzzy file finder (Ctrl+P) — type to filter, scored matching
+- Recent files (Ctrl+E) — persisted across sessions
+
+### Navigation
+- Go-to-symbol in file (F7) — functions, structs, classes, defines
+- Go-to-symbol across project (Ctrl+T)
+- Command palette (F8) — searchable list of all commands
 - Jump to line (Ctrl+G)
-- Bracket match highlight — matching bracket shown in magenta
-- Show/hide whitespace characters (F2)
-- Word wrap toggle (F4)
-- Arrow keys, Home/End, Page Up/Down, Ctrl+Home/End
-- Save with Ctrl+S, quit with Ctrl+Q
-- Line number gutter
-- Status bar with filename, cursor position, and modified indicator
-- Horizontal and vertical scrolling
-- Terminal resize support
-- Syntax highlighting for C, C++, Python, JavaScript, TypeScript, Rust, Go, JSON, Markdown, Shell, and Makefile
-- Region highlight (Ctrl+U) — mark lines with a visible box border
-- File explorer panel (Ctrl+B) — browse, open, create, rename, and delete files
-- Fuzzy file finder (Ctrl+P) — type to filter, Enter to open, scored fuzzy matching
-- Recent files (Ctrl+E) — quick-pick from recently opened files, persisted across sessions
-- Go-to-symbol in file (F7) — jump to functions, structs, classes, defines
-- Go-to-symbol in workspace (Ctrl+T) — search symbols across all project files
-- Command palette (F8) — searchable list of all commands with key bindings
-- Color themes (F6) — cycle between Default Dark, Default Light, Monokai; load custom themes from ~/.config/texty/themes/
-- Build system integration (F5) — run build commands, parse errors, jump to error locations
-- Configurable build command via texty.json (`{"build_command": "make -j4"}`)
-- Git gutter — colored markers for added (+), modified (~), and deleted (_) lines
-- Git status panel (F9) — right-side panel listing changed files
+
+### Git Integration
+- Gutter markers — colored +/~/_ for added, modified, deleted lines
+- Git status panel (F9) — list changed files, stage with 's'
 - Git blame (Shift+F9) — per-line author and date annotations
-- Inline diff view (F10) — see deleted/changed lines from HEAD inline
-- Stage hunks (F11) — stage individual diff hunks to the index
-- Commit (F12) — commit staged changes with a message prompt
+- Inline diff view (F10) — see old lines from HEAD inline
+- Stage hunks (F11) — stage individual diff hunks
+- Commit (F12) — prompt for message, commit staged changes
+
+### Build System
+- Run build command (F5) — defaults to `make`
+- Parse gcc/clang errors into a bottom panel
+- Jump to error location (Enter on error)
+- Configurable via `texty.json`
+
+### Themes
+- 4 built-in themes: Default Dark, Default Light, Monokai, Gruvbox Dark
+- Cycle themes with F6
+- Custom themes from `~/.config/texty/themes/*.theme`
+- Theme background color support
+- Set preferred theme in `texty.json`: `{"theme": "Gruvbox Dark"}`
 
 ## Requirements
 
@@ -61,9 +67,20 @@ Produces the `./texty` binary.
 ./texty [filename]
 ```
 
+## Configuration
+
+Create a `texty.json` in your project root:
+
+```json
+{
+    "build_command": "make -j4",
+    "theme": "Gruvbox Dark"
+}
+```
+
 ## Key bindings
 
-### Navigation
+### Cursor movement
 
 | Key              | Action                      |
 |------------------|-----------------------------|
@@ -83,17 +100,9 @@ Produces the `./texty` binary.
 | Tab              | Insert 4 spaces                      |
 | `(` `[` `{`      | Auto-insert closing bracket          |
 | `"` `'`          | Auto-insert closing quote            |
-| Ctrl+G           | Jump to line number (prompts)        |
+| Ctrl+G           | Jump to line number                  |
 | Ctrl+Z           | Undo                                 |
 | Ctrl+Y           | Redo                                 |
-
-### View
-
-| Key              | Action                               |
-|------------------|--------------------------------------|
-| F2               | Toggle whitespace characters         |
-| F4               | Toggle word wrap                     |
-| Ctrl+U           | Mark/clear region highlight          |
 
 ### Selection & clipboard
 
@@ -101,8 +110,8 @@ Produces the `./texty` binary.
 |------------------|--------------------------------------|
 | Shift+Arrow      | Extend selection                     |
 | Ctrl+A           | Select all                           |
-| Ctrl+C           | Copy selection                       |
-| Ctrl+X           | Cut selection                        |
+| Ctrl+C           | Copy                                 |
+| Ctrl+X           | Cut                                  |
 | Ctrl+V           | Paste                                |
 
 ### Buffers
@@ -110,110 +119,105 @@ Produces the `./texty` binary.
 | Key              | Action                               |
 |------------------|--------------------------------------|
 | Ctrl+N           | New empty buffer                     |
-| Ctrl+O           | Open file (prompts for path)         |
-| Ctrl+W           | Close current buffer (confirm if unsaved) |
+| Ctrl+O           | Open file                            |
+| Ctrl+W           | Close buffer                         |
 | Ctrl+]           | Next buffer                          |
 | Ctrl+\           | Previous buffer                      |
 
 ### Search
 
-| Key              | Action                                       |
-|------------------|----------------------------------------------|
-| Ctrl+F           | Find (prompts for search string)             |
-| F3               | Find next match                              |
-| Shift+F3         | Find previous match                          |
-| Ctrl+R           | Replace all occurrences (prompts for both)   |
-| Escape           | Clear search highlights                      |
+| Key              | Action                               |
+|------------------|--------------------------------------|
+| Ctrl+F           | Find                                 |
+| F3               | Find next                            |
+| Shift+F3         | Find previous                        |
+| Ctrl+R           | Replace all                          |
+| Escape           | Clear search highlights              |
 
-> **Note:** Search is case-sensitive. Ctrl+H cannot be used for Replace because
-> it maps to the same byte as Backspace in most terminals.
-
-### File explorer
+### Navigation & tools
 
 | Key              | Action                                          |
 |------------------|-------------------------------------------------|
-| Ctrl+B           | Open explorer and focus it                      |
-| Ctrl+B           | Return focus to editor (panel stays open)       |
-| Ctrl+B           | Focus explorer again (highlights current file)  |
-| Escape           | Return focus to editor (panel stays open)       |
-| Ctrl+W           | Close the explorer panel                        |
-| Up / Down        | Move cursor                                     |
-| Right            | Expand directory                                |
-| Left             | Collapse directory                              |
-| Enter            | Open file / toggle directory                    |
-| `n`              | New file (prompts for name)                     |
-| `N`              | New directory (prompts for name)                |
-| `r`              | Rename entry (prompts for new name)             |
-| `d`              | Delete entry (confirms before deleting)         |
+| Ctrl+P           | Fuzzy file finder                               |
+| Ctrl+E           | Recent files                                    |
+| Ctrl+T           | Go to symbol in workspace                       |
+| F5               | Build                                           |
+| F6               | Cycle color theme                               |
+| F7               | Go to symbol in file                            |
+| F8               | Command palette                                 |
 
-> **Note:** Ctrl+B cycles through three states: explorer hidden → explorer
-> focused → editor focused (panel visible). Opening a file that is already in
-> an open buffer switches to that buffer instead of creating a duplicate.
+### View
 
-### Navigation
-
-| Key              | Action                                          |
-|------------------|-------------------------------------------------|
-| Ctrl+P           | Fuzzy file finder (type to filter, Enter to open)|
-| Ctrl+E           | Recent files (quick-pick from recently opened)   |
-| F6               | Cycle color theme                                |
-| F7               | Go to symbol in current file                     |
-| Ctrl+T           | Go to symbol in workspace (all project files)    |
-| F8               | Command palette (search all commands)             |
-
-### Build
-
-| Key              | Action                                          |
-|------------------|-------------------------------------------------|
-| F5               | Run build command (shows build panel)           |
-
-> **Note:** The default build command is `make`. To customize, create a
-> `texty.json` file in your project root: `{"build_command": "cmake --build build"}`
-
-#### Build panel (F5)
-
-| Key              | Action                                          |
-|------------------|-------------------------------------------------|
-| Up / Down        | Navigate error entries                          |
-| Enter            | Jump to error location (opens file, moves cursor)|
-| Escape           | Return focus to editor (panel stays open)       |
-| Ctrl+W           | Close the build panel                           |
-| F5               | Re-run the build                                |
+| Key              | Action                               |
+|------------------|--------------------------------------|
+| F2               | Toggle whitespace                    |
+| F4               | Toggle word wrap                     |
+| Ctrl+U           | Mark/clear region highlight          |
+| Ctrl+B           | Toggle file explorer                 |
 
 ### Git
 
-| Key              | Action                                          |
-|------------------|-------------------------------------------------|
-| F9               | Toggle git status panel                         |
-| Shift+F9         | Toggle git blame (author + date per line)       |
-| F10              | Toggle inline diff view (old lines from HEAD)   |
-| F11              | Stage the hunk at the cursor                    |
-| F12              | Commit staged changes (prompts for message)     |
+| Key              | Action                               |
+|------------------|--------------------------------------|
+| F9               | Git status panel                     |
+| Shift+F9         | Git blame                            |
+| F10              | Inline diff view                     |
+| F11              | Stage hunk at cursor                 |
+| F12              | Commit staged changes                |
 
-> **Note:** The git gutter (colored +/~/_  markers) is always visible for
-> tracked files. F11 requires the file to be saved first. Blame auto-clears
-> when you edit (line numbers shift); save and re-toggle to refresh.
-> To stage an entire file, use the git status panel (F9 → `s`).
+### Panel navigation
 
-#### Git status panel (F9)
+All panels (file explorer, git status, build output):
 
-| Key              | Action                                          |
-|------------------|-------------------------------------------------|
-| Up / Down        | Navigate entries                                |
-| Enter            | Open the highlighted file                       |
-| `s`              | Stage the highlighted file                      |
-| Escape           | Return focus to editor (panel stays open)       |
-| Ctrl+W           | Close the panel                                 |
+| Key              | Action                               |
+|------------------|--------------------------------------|
+| Up / Down        | Navigate entries                     |
+| Enter            | Open / jump to selection             |
+| Escape           | Return focus to editor               |
+| Ctrl+W           | Close the panel                      |
+
+Git status panel also supports: `s` to stage the highlighted file.
 
 ### File
 
 | Key              | Action                               |
 |------------------|--------------------------------------|
 | Ctrl+S           | Save                                 |
-| Ctrl+Q           | Quit (confirm if unsaved)            |
+| Ctrl+Q           | Quit                                 |
 
-> **Note:** Ctrl+] / Ctrl+\ for buffer switching use ASCII control characters
-> (29 and 28) which are reliable across all terminal types.
+## Custom themes
+
+Create `.theme` files in `~/.config/texty/themes/`:
+
+```
+name = My Custom Theme
+
+# Terminal background/foreground
+default_fg = white
+default_bg = black
+
+# Syntax colors (color names: black red green yellow blue magenta cyan white, or -1 for default)
+syn_keyword = yellow -1
+syn_type = cyan -1
+syn_string = green -1
+syn_comment = blue -1
+syn_preproc = magenta -1
+syn_number = red -1
+
+# UI elements
+gutter = cyan -1
+status = black cyan
+status_dirty = black yellow
+selection = black cyan
+tab_active = white blue
+tab_inactive = black white
+search_match = black yellow
+search_cur = black green
+bracket = white magenta
+
+# Bold attributes (1 = bold, 0 = normal)
+syn_keyword_bold = 1
+```
 
 ## Project structure
 
@@ -225,12 +229,18 @@ src/
   display.h/c   — ncurses terminal rendering
   input.h/c     — Keyboard input dispatch
   undo.h/c      — Undo / redo stack
-  syntax.h/c    — Syntax highlighting (C, Python, JS, Rust, Go, and more)
+  syntax.h/c    — Syntax highlighting
   filetree.h/c  — File explorer tree logic
   git.h/c       — Git integration (gutter, blame, diff, staging, commit)
   build.h/c     — Build system (run command, parse errors, config)
   finder.h/c    — Fuzzy file finder (directory walk, scoring, filtering)
   theme.h/c     — Color theme support (built-in themes, parsing, cycling)
-Makefile
+tests/
+  test_runner.h — Minimal test framework
+  test_buffer.c, test_editor.c, test_undo.c, test_syntax.c,
+  test_filetree.c, test_git.c, test_build.c, test_finder.c,
+  test_theme.c  — 663 unit tests
+  display_stub.c — ncurses stubs for testing
+Makefile        — Build system (make, make test, make test-debug)
 TODO.md         — Phased development roadmap
 ```

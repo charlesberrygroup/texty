@@ -6,126 +6,62 @@ A cross-platform terminal IDE written in C, built in phases.
 
 ## Phase 1 — Core Editor (MVP) ✅
 
-The goal of Phase 1 is a working, usable text editor with clean architecture
-that all future phases will build on.
-
-### Text Editing
-- [x] Open a file from the command line
-- [x] Display file contents with line numbers
-- [x] Insert characters at cursor position
-- [x] Delete characters (Backspace and Delete key)
-- [x] Insert newlines (Enter key)
-- [x] Save file (Ctrl+S)
-- [x] Quit editor (Ctrl+Q), with warning on unsaved changes
-
-### Cursor Movement
-- [x] Arrow keys (Up, Down, Left, Right)
-- [x] Home / End — jump to start/end of line
-- [x] Page Up / Page Down — scroll one screen at a time
-- [x] Ctrl+Home / Ctrl+End — jump to start/end of file
-- [x] Desired-column tracking (cursor snaps back when moving vertically)
-
-### Display
-- [x] Line number gutter
-- [x] Status bar: filename, cursor position (line:col), modified indicator
-- [x] Scrolling viewport (horizontal and vertical)
-- [x] Terminal resize support
+- [x] Open/save files, insert/delete characters, newlines
+- [x] Arrow keys, Home/End, Page Up/Down, Ctrl+Home/End
+- [x] Line number gutter, status bar, scrolling, terminal resize
 
 ---
 
 ## Phase 2 — Editor Enhancements ✅
 
-### Undo / Redo
-- [x] Undo last action (Ctrl+Z)
-- [x] Redo (Ctrl+Y / Ctrl+Shift+Z)
-- [x] Undo history limit (configurable)
-
-### Clipboard & Selection
-- [x] Visual selection mode (Shift+Arrow keys)
-- [x] Copy selection (Ctrl+C)
-- [x] Cut selection (Ctrl+X)
-- [x] Paste (Ctrl+V)
-- [x] Select all (Ctrl+A)
-
-### Search & Replace
-- [x] Find text (Ctrl+F)
-- [x] Find next / previous (F3 / Shift+F3)
-- [x] Replace all (Ctrl+R — Ctrl+H conflicts with Backspace on ASCII level)
-- [ ] Case-sensitive toggle (currently always case-sensitive)
-- [ ] Regex support (deferred to Phase 3)
-
-### Multiple Buffers (Tabs)
-- [x] Open new file in a new buffer (Ctrl+O)
-- [x] Create new empty buffer (Ctrl+N)
-- [x] Switch between buffers (Ctrl+] / Ctrl+\)
-- [x] Close current buffer (Ctrl+W)
-- [x] Tab bar at the top showing open buffers
-
-### Syntax Highlighting
-- [x] Language detection by file extension
-- [x] C / C++ highlighting (keywords, types, strings, comments, preprocessor)
-- [x] Python highlighting
-- [x] JavaScript / TypeScript highlighting
-- [x] Rust highlighting
-- [x] Go highlighting
-- [x] JSON highlighting
-- [x] Markdown highlighting
-- [x] Shell script highlighting
-- [x] Makefile highlighting
-
-### Smart Editing
-- [x] Auto-indent on newline (matches current line's indentation)
-- [x] Tab key inserts spaces (configurable tab width)
-- [x] Show/hide whitespace characters
-- [x] Word-wrap toggle
-- [x] Jump to line (Ctrl+G)
-- [x] Bracket matching highlight
-- [x] Auto-close brackets and quotes
+- [x] Undo / Redo (Ctrl+Z / Ctrl+Y)
+- [x] Clipboard & Selection (Shift+Arrow, Ctrl+A/C/X/V)
+- [x] Multiple Buffers with tab bar (Ctrl+N/O/W, Ctrl+]/\\)
+- [x] Search & Replace (Ctrl+F, F3, Shift+F3, Ctrl+R)
+- [x] Syntax Highlighting (C, C++, Python, JS/TS, Rust, Go, JSON, Markdown, Shell, Makefile)
+- [x] Smart Editing (auto-indent, tab→spaces, bracket matching, auto-close, Ctrl+G, F2, F4)
 
 ---
 
-## Phase 3 — IDE Features (IN PROGRESS)
+## Phase 3 — IDE Features ✅
 
 ### File Explorer ✅
-- [x] Side panel showing directory tree
-- [x] Toggle file explorer (Ctrl+B)
-- [x] Open file from tree with Enter
-- [x] Create / rename / delete files and directories
-- [x] Expand/collapse directories
+- [x] Side panel (Ctrl+B) — browse, open, create, rename, delete files
 
 ### Region Highlight ✅
-- [x] Mark selected lines as a persistent region (Ctrl+U)
-- [x] Red box border with horizontal lines at top/bottom and vertical bars on sides
-- [x] Second Ctrl+U clears the region
+- [x] Mark selected lines with a visible box (Ctrl+U)
 
 ### Git Integration ✅
-- [x] Show modified/added/deleted lines in gutter
-- [x] Git status panel (F9)
-- [x] Git blame (Shift+F9)
-- [x] Inline diff view (F10)
-- [x] Stage hunks (F11)
-- [x] Commit from editor (F12)
+- [x] Gutter markers (added/modified/deleted)
+- [x] Git status panel (F9) — stage files with 's'
+- [x] Git blame (Shift+F9) — per-line author + date
+- [x] Inline diff view (F10) — phantom lines from HEAD
+- [x] Stage hunks (F11) — stage individual diff hunks
+- [x] Commit (F12) — prompt for message, commit staged changes
 
-### Build System Integration ✅
-- [x] Run build command (F5)
-- [x] Parse compiler errors and warnings from build output
-- [x] Error panel showing build output
-- [x] Jump to error location from error panel (Enter on error)
-- [x] Configurable build command per project (texty.json)
+### Build System ✅
+- [x] Run build command (F5) — defaults to `make`
+- [x] Parse gcc/clang errors into a bottom panel
+- [x] Jump to error location (Enter on error)
+- [x] Configurable via texty.json (`build_command`)
 
 ### Navigation & Search ✅
 - [x] Fuzzy file finder (Ctrl+P)
+- [x] Recent files (Ctrl+E) — persisted across sessions
 - [x] Go-to-symbol in file (F7)
 - [x] Go-to-symbol in workspace (Ctrl+T)
-- [x] Command palette (F8)
-- [x] Recent files list (Ctrl+E)
+- [x] Command palette (F8) — searchable list of all commands
 
-### Configuration & Extensibility
+### Configuration ✅
+- [x] Color themes (F6) — Default Dark, Default Light, Monokai, Gruvbox Dark
+- [x] Custom themes from ~/.config/texty/themes/*.theme
+- [x] Theme background color support (default_fg/default_bg)
+- [x] Theme preference in texty.json (`theme` key)
+
+### Configuration (deferred)
 - [ ] Config file (~/.config/texty/config.toml)
 - [ ] Custom key bindings
-- [x] Theme support (color schemes)
 - [ ] Plugin system (dynamic shared libraries)
-- [ ] Per-project settings (texty.json in project root)
 
 ---
 
@@ -134,13 +70,12 @@ that all future phases will build on.
 ### Language Server Protocol (LSP)
 - [ ] LSP client infrastructure (start/stop language servers)
 - [ ] Auto-completion with popup (Tab to accept)
-- [ ] Go-to-definition (F12)
-- [ ] Go-to-declaration (Ctrl+F12)
-- [ ] Find all references (Shift+F12)
+- [ ] Go-to-definition
+- [ ] Find all references
 - [ ] Hover documentation popup
 - [ ] Inline error / warning diagnostics
-- [ ] Code formatting (Ctrl+Shift+F)
-- [ ] Rename symbol (F2)
+- [ ] Code formatting
+- [ ] Rename symbol
 - [ ] Signature help for function calls
 
 ### Embedded Terminal
@@ -149,10 +84,10 @@ that all future phases will build on.
 - [ ] Toggle terminal panel height
 
 ### Split Panes
-- [ ] Split editor horizontally (Ctrl+Shift+-)
-- [ ] Split editor vertically (Ctrl+Shift+\)
-- [ ] Move focus between panes (Ctrl+Shift+Arrow)
+- [ ] Split editor horizontally / vertically
+- [ ] Move focus between panes
 - [ ] Close pane
+- [ ] Use ncurses windows (newwin) — previous stdscr approach failed
 
 ---
 
