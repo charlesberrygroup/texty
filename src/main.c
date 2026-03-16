@@ -52,9 +52,11 @@
 #include "display.h"
 #include "input.h"
 #include "theme.h"
+#include "lsp.h"
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <ncurses.h>   /* for halfdelay, getch, ERR */
 
 int main(int argc, char *argv[])
 {
@@ -106,18 +108,36 @@ int main(int argc, char *argv[])
     }
 
     /* ---------------------------------------------------------------------- *
-     * 4. Main event loop
+     * 4. Try to start LSP for the initial file
+     * ---------------------------------------------------------------------- */
+    editor_lsp_start(&ed);
+
+    /* ---------------------------------------------------------------------- *
+     * 5. Main event loop
      * ---------------------------------------------------------------------- *
-     * Each iteration:
-     *   - Renders the current state to the terminal.
-     *   - Waits for (and processes) one keypress.
+     * The event loop uses halfdelay(1) so getch() returns ERR after 100ms
+     * if no key is pressed.  This allows us to periodically check for
+     * incoming LSP messages without blocking forever on keyboard input.
      *
-     * The loop exits when any input handler sets ed.should_quit = 1
-     * (for example, Ctrl+Q).
+     * Each iteration:
+     *   1. Render the current state.
+     *   2. Wait up to 100ms for a keypress.
+     *   3. If a key was pressed, process it via input_process_key().
+     *   4. Poll the LSP server for incoming messages (non-blocking).
+     *
+     * The loop exits when any input handler sets ed.should_quit = 1.
      */
+    halfdelay(1);  /* getch() returns ERR after 100ms (1 tenth of a second) */
+
     while (!ed.should_quit) {
         display_render(&ed);
-        input_process_key(&ed);
+
+        int key = getch();
+        if (key != ERR)
+            input_process_key_with(&ed, key);
+
+        /* Check for incoming LSP messages (diagnostics, responses, etc.) */
+        editor_lsp_poll(&ed);
     }
 
     /* ---------------------------------------------------------------------- *

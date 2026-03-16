@@ -522,12 +522,13 @@ static void input_process_build_panel_key(struct Editor *ed, int key)
 
 void input_process_key(struct Editor *ed)
 {
-    /*
-     * getch() blocks until a key is pressed and returns its key code.
-     * With keypad(stdscr, TRUE) set in display_init(), multi-byte sequences
-     * like arrow keys are automatically decoded into KEY_UP, KEY_DOWN, etc.
-     */
     int key = getch();
+    if (key == ERR) return;  /* no key available (halfdelay timeout) */
+    input_process_key_with(ed, key);
+}
+
+void input_process_key_with(struct Editor *ed, int key)
+{
 
     /*
      * If a key other than Ctrl+Q comes in, clear any pending quit warning.
@@ -882,6 +883,19 @@ void input_process_key(struct Editor *ed)
             editor_goto_workspace_symbol(ed);
             break;
 
+        case 0:                /* Ctrl+Space — LSP auto-completion
+                                * Ctrl+Space sends NUL (0x00) on most terminals. */
+            editor_lsp_complete(ed);
+            break;
+
+        case KEY_F(1):         /* F1 — Go to definition (LSP) */
+            editor_lsp_goto_definition(ed);
+            break;
+
+        case CTRL('k'):        /* Ctrl+K — Hover documentation (LSP) */
+            editor_lsp_hover(ed);
+            break;
+
         case CTRL('b'):        /* Ctrl+B — Toggle file explorer panel */
             /*
              * editor_toggle_filetree() handles all the logic:
@@ -997,5 +1011,19 @@ void input_process_key(struct Editor *ed)
             ed->show_git_blame = 0;
             git_blame_free(&ed->git_blame);
         }
+    }
+
+    /*
+     * Notify the LSP server when the buffer is modified.
+     *
+     * We send a didChange notification after every text-editing key.
+     * This uses full document sync (sends the entire buffer) which is
+     * simple but not the most efficient.  For files under 10K lines
+     * this is fast enough.
+     */
+    if (ed->lsp_server) {
+        Buffer *cur = editor_current_buffer(ed);
+        if (cur && cur->dirty)
+            editor_lsp_did_change(ed);
     }
 }

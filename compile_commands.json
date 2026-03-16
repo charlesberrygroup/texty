@@ -1,0 +1,72 @@
+[
+  {
+    "directory": "/Users/davidlathrop/code/texty",
+    "command": "gcc -Wall -Wextra -std=c99 -g -Isrc -D_POSIX_C_SOURCE=200809L -c -o obj/buffer.o src/buffer.c",
+    "file": "/Users/davidlathrop/code/texty/src/buffer.c"
+  },
+  {
+    "directory": "/Users/davidlathrop/code/texty",
+    "command": "gcc -Wall -Wextra -std=c99 -g -Isrc -D_POSIX_C_SOURCE=200809L -c -o obj/build.o src/build.c",
+    "file": "/Users/davidlathrop/code/texty/src/build.c"
+  },
+  {
+    "directory": "/Users/davidlathrop/code/texty",
+    "command": "gcc -Wall -Wextra -std=c99 -g -Isrc -D_POSIX_C_SOURCE=200809L -c -o obj/display.o src/display.c",
+    "file": "/Users/davidlathrop/code/texty/src/display.c"
+  },
+  {
+    "directory": "/Users/davidlathrop/code/texty",
+    "command": "gcc -Wall -Wextra -std=c99 -g -Isrc -D_POSIX_C_SOURCE=200809L -c -o obj/editor.o src/editor.c",
+    "file": "/Users/davidlathrop/code/texty/src/editor.c"
+  },
+  {
+    "directory": "/Users/davidlathrop/code/texty",
+    "command": "gcc -Wall -Wextra -std=c99 -g -Isrc -D_POSIX_C_SOURCE=200809L -c -o obj/filetree.o src/filetree.c",
+    "file": "/Users/davidlathrop/code/texty/src/filetree.c"
+  },
+  {
+    "directory": "/Users/davidlathrop/code/texty",
+    "command": "gcc -Wall -Wextra -std=c99 -g -Isrc -D_POSIX_C_SOURCE=200809L -c -o obj/finder.o src/finder.c",
+    "file": "/Users/davidlathrop/code/texty/src/finder.c"
+  },
+  {
+    "directory": "/Users/davidlathrop/code/texty",
+    "command": "gcc -Wall -Wextra -std=c99 -g -Isrc -D_POSIX_C_SOURCE=200809L -c -o obj/git.o src/git.c",
+    "file": "/Users/davidlathrop/code/texty/src/git.c"
+  },
+  {
+    "directory": "/Users/davidlathrop/code/texty",
+    "command": "gcc -Wall -Wextra -std=c99 -g -Isrc -D_POSIX_C_SOURCE=200809L -c -o obj/input.o src/input.c",
+    "file": "/Users/davidlathrop/code/texty/src/input.c"
+  },
+  {
+    "directory": "/Users/davidlathrop/code/texty",
+    "command": "gcc -Wall -Wextra -std=c99 -g -Isrc -D_POSIX_C_SOURCE=200809L -c -o obj/json.o src/json.c",
+    "file": "/Users/davidlathrop/code/texty/src/json.c"
+  },
+  {
+    "directory": "/Users/davidlathrop/code/texty",
+    "command": "gcc -Wall -Wextra -std=c99 -g -Isrc -D_POSIX_C_SOURCE=200809L -c -o obj/lsp.o src/lsp.c",
+    "file": "/Users/davidlathrop/code/texty/src/lsp.c"
+  },
+  {
+    "directory": "/Users/davidlathrop/code/texty",
+    "command": "gcc -Wall -Wextra -std=c99 -g -Isrc -D_POSIX_C_SOURCE=200809L -c -o obj/main.o src/main.c",
+    "file": "/Users/davidlathrop/code/texty/src/main.c"
+  },
+  {
+    "directory": "/Users/davidlathrop/code/texty",
+    "command": "gcc -Wall -Wextra -std=c99 -g -Isrc -D_POSIX_C_SOURCE=200809L -c -o obj/syntax.o src/syntax.c",
+    "file": "/Users/davidlathrop/code/texty/src/syntax.c"
+  },
+  {
+    "directory": "/Users/davidlathrop/code/texty",
+    "command": "gcc -Wall -Wextra -std=c99 -g -Isrc -D_POSIX_C_SOURCE=200809L -c -o obj/theme.o src/theme.c",
+    "file": "/Users/davidlathrop/code/texty/src/theme.c"
+  },
+  {
+    "directory": "/Users/davidlathrop/code/texty",
+    "command": "gcc -Wall -Wextra -std=c99 -g -Isrc -D_POSIX_C_SOURCE=200809L -c -o obj/undo.o src/undo.c",
+    "file": "/Users/davidlathrop/code/texty/src/undo.c"
+  }
+]

@@ -38,4 +38,13 @@ struct Editor;
  */
 void input_process_key(struct Editor *ed);
 
+/**
+ * input_process_key_with — process a pre-read key code.
+ *
+ * Like input_process_key(), but takes a key that was already read by
+ * the caller (via getch()).  Used by the halfdelay-based event loop
+ * where the main loop reads the key and only calls this if key != ERR.
+ */
+void input_process_key_with(struct Editor *ed, int key);
+
 #endif /* INPUT_H */

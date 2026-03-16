@@ -24,6 +24,7 @@
 
 #include "undo.h"   /* UndoStack — each buffer tracks its own edit history */
 #include "git.h"    /* GitState — per-buffer git line change markers */
+#include "lsp.h"    /* LspDiagnosticList — per-buffer LSP diagnostics */
 
 /* ---- Constants ------------------------------------------------------------ */
 
@@ -90,6 +91,12 @@ typedef struct {
      * When git_state.line_status is NULL, no markers are shown.
      */
     GitState   git_state;
+
+    /*
+     * LSP diagnostics — errors/warnings reported by the language server.
+     * Updated when a textDocument/publishDiagnostics notification arrives.
+     */
+    LspDiagnosticList lsp_diagnostics;
 } Buffer;
 
 /* ---- Lifecycle ------------------------------------------------------------ */

@@ -22,6 +22,9 @@
 #include "theme.h"
 #include <stdarg.h>
 
+/* Forward declaration — full definition in lsp.h */
+struct LspServer;
+
 /*
  * Forward declaration of FileTree.
  *
@@ -327,6 +330,16 @@ typedef struct Editor {
 
     /** theme_mgr — holds all available themes and the active selection. */
     ThemeManager theme_mgr;
+
+    /* ---- LSP -------------------------------------------------------------- */
+
+    /*
+     * lsp_server — the running language server process, or NULL.
+     *
+     * Started automatically when a file with a configured language is opened.
+     * Stopped on quit or when no supported files are open.
+     */
+    struct LspServer *lsp_server;
 } Editor;
 
 /* ---- Lifecycle ------------------------------------------------------------ */
@@ -814,6 +827,94 @@ void editor_toggle_inline_diff(Editor *ed);
  * Shows a status message indicating success or failure.
  */
 void editor_stage_hunk(Editor *ed);
+
+/* ---- LSP ------------------------------------------------------------------ */
+
+/**
+ * editor_lsp_start — start a language server for the current buffer's language.
+ *
+ * Looks up the server command in texty.json's "lsp_servers" config.
+ * Sends the LSP initialize request and textDocument/didOpen.
+ * Does nothing if a server is already running or no command is configured.
+ */
+void editor_lsp_start(Editor *ed);
+
+/**
+ * editor_lsp_stop — stop the running language server.
+ */
+void editor_lsp_stop(Editor *ed);
+
+/**
+ * editor_lsp_poll — process any pending LSP messages (non-blocking).
+ *
+ * Called from the main event loop on each iteration.
+ * Reads messages from the server pipe and dispatches them
+ * (diagnostics, completion responses, etc.).
+ */
+void editor_lsp_poll(Editor *ed);
+
+/**
+ * editor_lsp_did_open — notify the server that a file was opened.
+ */
+void editor_lsp_did_open(Editor *ed);
+
+/**
+ * editor_lsp_did_change — notify the server that a file was modified.
+ */
+void editor_lsp_did_change(Editor *ed);
+
+/**
+ * editor_lsp_did_save — notify the server that a file was saved.
+ */
+void editor_lsp_did_save(Editor *ed);
+
+/**
+ * editor_lsp_complete — trigger auto-completion at the cursor (Ctrl+Space).
+ *
+ * Sends a textDocument/completion request, waits for the response,
+ * and shows a popup with the results.  If the user selects an item,
+ * inserts the completion text at the cursor.
+ */
+void editor_lsp_complete(Editor *ed);
+
+/**
+ * editor_lsp_hover — show documentation for the symbol under the cursor (Ctrl+K).
+ */
+void editor_lsp_hover(Editor *ed);
+
+/**
+ * editor_lsp_references — find all references to the symbol under cursor.
+ *
+ * Shows results in a popup.  Enter jumps to the selected reference.
+ */
+void editor_lsp_references(Editor *ed);
+
+/**
+ * editor_lsp_format — format the current document.
+ *
+ * Sends textDocument/formatting, applies the returned text edits.
+ */
+void editor_lsp_format(Editor *ed);
+
+/**
+ * editor_lsp_rename — rename the symbol under the cursor.
+ *
+ * Prompts for a new name, sends textDocument/rename, applies workspace edits.
+ */
+void editor_lsp_rename(Editor *ed);
+
+/**
+ * editor_lsp_signature_help — show parameter info for the current function call.
+ */
+void editor_lsp_signature_help(Editor *ed);
+
+/**
+ * editor_lsp_goto_definition — jump to definition of symbol under cursor (F1).
+ *
+ * Sends textDocument/definition, waits for response, opens the target file
+ * and jumps to the target location.
+ */
+void editor_lsp_goto_definition(Editor *ed);
 
 /* ---- Misc ----------------------------------------------------------------- */
 

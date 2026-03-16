@@ -198,6 +198,10 @@ void display_init(void)
         init_pair(CPAIR_FINDER_CURSOR, COLOR_BLACK, COLOR_WHITE);
         init_pair(CPAIR_FINDER_MATCH,  COLOR_GREEN, -1);
 
+        /* LSP diagnostics */
+        init_pair(CPAIR_LSP_ERROR,   COLOR_RED,    -1);
+        init_pair(CPAIR_LSP_WARNING, COLOR_YELLOW, -1);
+
         /* Staged files in the git status panel: green (matches git CLI) */
         init_pair(CPAIR_GIT_STAGED, COLOR_GREEN, -1);
     }
@@ -806,6 +810,46 @@ static void draw_git_marker(const GitState *gs, int buf_row)
 }
 
 /*
+ * draw_lsp_line_indicator — draw an LSP diagnostic indicator after the line number.
+ *
+ * If the given buffer line has an LSP error, draws a red dot.
+ * If it has a warning, draws a yellow dot.
+ * If both, error takes priority.
+ *
+ * The indicator replaces the space between the line number and the text.
+ * Returns 1 if an indicator was drawn, 0 if not.
+ */
+static int draw_lsp_line_indicator(const Buffer *buf, int buf_row)
+{
+    if (!buf || buf->lsp_diagnostics.count == 0) return 0;
+
+    int worst_severity = 0;  /* 0 = none, 1 = error, 2 = warning */
+    for (int i = 0; i < buf->lsp_diagnostics.count; i++) {
+        if (buf->lsp_diagnostics.items[i].line == buf_row) {
+            int sev = buf->lsp_diagnostics.items[i].severity;
+            if (sev == LSP_SEV_ERROR && worst_severity != 1)
+                worst_severity = 1;
+            else if (sev == LSP_SEV_WARNING && worst_severity == 0)
+                worst_severity = 2;
+        }
+    }
+
+    if (worst_severity == 0) return 0;
+
+    /* Draw a colored marker — overwrite the git marker column */
+    if (worst_severity == 1) {
+        attron(COLOR_PAIR(CPAIR_LSP_ERROR) | A_BOLD);
+        printw("E");
+        attroff(COLOR_PAIR(CPAIR_LSP_ERROR) | A_BOLD);
+    } else {
+        attron(COLOR_PAIR(CPAIR_LSP_WARNING));
+        printw("W");
+        attroff(COLOR_PAIR(CPAIR_LSP_WARNING));
+    }
+    return 1;
+}
+
+/*
  * draw_phantom_line — render one "old" line from HEAD in the inline diff view.
  *
  * Phantom lines are read-only lines from the HEAD version of the file that
@@ -1362,12 +1406,13 @@ static void draw_editor_area(struct Editor *ed)
                 attron(COLOR_PAIR(CPAIR_GUTTER));
                 if (segment == 0) {
                     /*
-                     * First segment: git marker + line number.
-                     * Column 0 is the git marker (colored +/~/_) or space.
-                     * Columns 1-4 are the right-aligned line number.
+                     * First segment: indicator + line number.
+                     * Column 0: LSP diagnostic or git marker.
+                     * Columns 1-4: right-aligned line number.
                      */
                     attroff(COLOR_PAIR(CPAIR_GUTTER));
-                    draw_git_marker(&buf->git_state, buf_row);
+                    if (!draw_lsp_line_indicator(buf, buf_row))
+                        draw_git_marker(&buf->git_state, buf_row);
                     attron(COLOR_PAIR(CPAIR_GUTTER));
                     if (is_cursor_row) attron(A_BOLD);
                     printw("%3d ", buf_row + 1);
@@ -1649,8 +1694,15 @@ static void draw_editor_area(struct Editor *ed)
                 if (is_cursor_row) attroff(A_BOLD);
                 attroff(COLOR_PAIR(CPAIR_REGION));
             } else {
-                /* Column 0: git marker, columns 1-4: line number + space */
-                draw_git_marker(&buf->git_state, buf_row);
+                /*
+                 * Column 0: indicator marker (LSP diagnostic > git change).
+                 * Columns 1-4: line number + space.
+                 *
+                 * LSP diagnostics take priority over git markers in column 0
+                 * because errors/warnings are more actionable than change status.
+                 */
+                if (!draw_lsp_line_indicator(buf, buf_row))
+                    draw_git_marker(&buf->git_state, buf_row);
                 attron(COLOR_PAIR(CPAIR_GUTTER));
                 if (is_cursor_row) attron(A_BOLD);
                 printw("%3d ", buf_row + 1);
@@ -1877,13 +1929,42 @@ static void draw_status_bar(struct Editor *ed)
      * save and quit.
      */
     if (ed->status_msg[0] == '\0') {
-        /* Overwrite the centre of the status bar with hint text */
-        const char *hint = "Ctrl+S save  Ctrl+Q quit";
-        int hint_col = (ed->term_cols - (int)strlen(hint)) / 2;
-        if (hint_col > (int)strlen(left) && hint_col > 0) {
-            attron(COLOR_PAIR(color));
-            mvprintw(status_row, hint_col, "%s", hint);
-            attroff(COLOR_PAIR(color));
+        /*
+         * If the cursor is on a line with an LSP diagnostic, show the
+         * diagnostic message instead of the default hint.  This gives
+         * the user immediate feedback about errors without needing a
+         * separate panel.
+         */
+        const char *diag_msg = NULL;
+        int diag_sev = 0;
+        if (buf->lsp_diagnostics.count > 0) {
+            for (int i = 0; i < buf->lsp_diagnostics.count; i++) {
+                if (buf->lsp_diagnostics.items[i].line == ed->cursor_row) {
+                    diag_msg = buf->lsp_diagnostics.items[i].message;
+                    diag_sev = buf->lsp_diagnostics.items[i].severity;
+                    break;  /* show the first diagnostic on this line */
+                }
+            }
+        }
+
+        if (diag_msg && diag_msg[0]) {
+            /* Show diagnostic message in the center with error/warning color */
+            int diag_cpair = (diag_sev == LSP_SEV_ERROR)
+                             ? CPAIR_LSP_ERROR : CPAIR_LSP_WARNING;
+            int msg_col = (ed->term_cols - (int)strlen(diag_msg)) / 2;
+            if (msg_col < (int)strlen(left) + 1) msg_col = (int)strlen(left) + 1;
+            attron(COLOR_PAIR(diag_cpair) | A_BOLD);
+            mvprintw(status_row, msg_col, "%.80s", diag_msg);
+            attroff(COLOR_PAIR(diag_cpair) | A_BOLD);
+        } else {
+            /* Overwrite the centre of the status bar with hint text */
+            const char *hint = "Ctrl+S save  Ctrl+Q quit";
+            int hint_col = (ed->term_cols - (int)strlen(hint)) / 2;
+            if (hint_col > (int)strlen(left) && hint_col > 0) {
+                attron(COLOR_PAIR(color));
+                mvprintw(status_row, hint_col, "%s", hint);
+                attroff(COLOR_PAIR(color));
+            }
         }
     } else {
         /* Show the status message in the centre */

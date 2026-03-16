@@ -41,6 +41,18 @@ A terminal-based IDE written in C, built from scratch.
 - Jump to error location (Enter on error)
 - Configurable via `texty.json`
 
+### Language Server Protocol (LSP)
+- Automatic server start for configured languages (clangd, pylsp, rust-analyzer, etc.)
+- Inline diagnostics — E/W markers in the gutter, messages in the status bar
+- Auto-completion (Ctrl+Space) — popup with fuzzy-filtered results
+- Go-to-definition (F1) — jump to symbol definition across files
+- Hover documentation (Ctrl+K) — show type info and docs for symbol under cursor
+- Find all references (via command palette) — list all usages, Enter to jump
+- Code formatting (via command palette) — format document using the language server
+- Rename symbol (via command palette) — rename across all files in the workspace
+- Signature help (via command palette) — show function parameter info
+- Configure in `texty.json`: `{"lsp_servers": {"c": "clangd"}}`
+
 ### Themes
 - 4 built-in themes: Default Dark, Default Light, Monokai, Gruvbox Dark
 - Cycle themes with F6
@@ -133,6 +145,18 @@ Create a `texty.json` in your project root:
 | Shift+F3         | Find previous                        |
 | Ctrl+R           | Replace all                          |
 | Escape           | Clear search highlights              |
+
+### LSP
+
+| Key              | Action                               |
+|------------------|--------------------------------------|
+| Ctrl+Space       | Auto-completion                      |
+| F1               | Go to definition                     |
+| Ctrl+K           | Hover documentation                  |
+
+> **Note:** Find references, format document, rename symbol, and signature help
+> are available through the command palette (F8). LSP requires a language server
+> to be configured in `texty.json`.
 
 ### Navigation & tools
 
@@ -235,6 +259,8 @@ src/
   build.h/c     — Build system (run command, parse errors, config)
   finder.h/c    — Fuzzy file finder (directory walk, scoring, filtering)
   theme.h/c     — Color theme support (built-in themes, parsing, cycling)
+  json.h/c      — Minimal JSON parser (for LSP protocol)
+  lsp.h/c       — LSP client (process management, message framing, protocol)
 tests/
   test_runner.h — Minimal test framework
   test_buffer.c, test_editor.c, test_undo.c, test_syntax.c,

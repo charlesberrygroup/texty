@@ -110,6 +110,7 @@ TESTOBJDIR = $(OBJDIR)/tests
 TEST_DEPS = $(OBJDIR)/buffer.o $(OBJDIR)/undo.o $(OBJDIR)/editor.o \
             $(OBJDIR)/syntax.o $(OBJDIR)/filetree.o $(OBJDIR)/git.o \
             $(OBJDIR)/build.o $(OBJDIR)/finder.o $(OBJDIR)/theme.o \
+            $(OBJDIR)/json.o $(OBJDIR)/lsp.o \
             $(TESTDIR)/display_stub.c
 
 # One binary per test source file

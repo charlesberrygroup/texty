@@ -1,0 +1,6 @@
+{
+    "build_command": "make",
+    "lsp_servers": {
+        "c": "clangd"
+    }
+}

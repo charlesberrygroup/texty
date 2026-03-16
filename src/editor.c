@@ -17,12 +17,15 @@
 #include "build.h"      /* for build_run, build_load_config, etc. */
 #include "finder.h"     /* for finder_collect_files, FinderFile, FinderSymbol */
 #include "syntax.h"     /* for syntax_detect_language — used by goto_symbol */
+#include "lsp.h"        /* for LspServer, lsp_server_start/stop, etc. */
+#include "json.h"       /* for json_parse, json_get, etc. — LSP responses */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
 #include <sys/stat.h>  /* for mkdir — used by recent_files_path */
+#include <unistd.h>    /* for getpid — used by LSP initialize */
 
 /* ============================================================================
  * Internal helpers
@@ -290,6 +293,9 @@ void editor_cleanup(Editor *ed)
         ed->build_result = NULL;
     }
 
+    /* Stop LSP server if running */
+    editor_lsp_stop(ed);
+
     /* Save and free recent files list */
     editor_recent_save(ed);
     for (int i = 0; i < ed->recent_count; i++)
@@ -459,6 +465,9 @@ int editor_save(Editor *ed)
     /* Refresh inline diff chunks if the view is active */
     if (ed->show_inline_diff)
         refresh_inline_diff(ed);
+
+    /* Notify LSP server about the save */
+    editor_lsp_did_save(ed);
 
     return 0;
 }
@@ -2596,6 +2605,13 @@ void editor_goto_workspace_symbol(Editor *ed)
 #define CMD_MARK_REGION     32
 #define CMD_COMMAND_PALETTE 33
 #define CMD_CYCLE_THEME    34
+#define CMD_LSP_COMPLETE   35
+#define CMD_LSP_GOTO_DEF   36
+#define CMD_LSP_HOVER      37
+#define CMD_LSP_REFERENCES 38
+#define CMD_LSP_FORMAT     39
+#define CMD_LSP_RENAME     40
+#define CMD_LSP_SIGNATURE  41
 
 typedef struct {
     const char *name;
@@ -2638,6 +2654,13 @@ static const PaletteEntry palette_commands[] = {
     { "Workspace Symbol",       "Ctrl+T",     CMD_WORKSPACE_SYMBOL },
     { "Mark Region",            "Ctrl+U",     CMD_MARK_REGION },
     { "Cycle Theme",            "F6",         CMD_CYCLE_THEME },
+    { "LSP Completion",         "Ctrl+Space", CMD_LSP_COMPLETE },
+    { "Go to Definition",       "F1",         CMD_LSP_GOTO_DEF },
+    { "Hover Documentation",    "Ctrl+K",     CMD_LSP_HOVER },
+    { "Find All References",    "F8 →",       CMD_LSP_REFERENCES },
+    { "Format Document",        "F8 →",       CMD_LSP_FORMAT },
+    { "Rename Symbol",          "F8 →",       CMD_LSP_RENAME },
+    { "Signature Help",         "F8 →",       CMD_LSP_SIGNATURE },
     { NULL, NULL, 0 }
 };
 
@@ -2716,6 +2739,13 @@ void editor_command_palette(Editor *ed)
         editor_set_status(ed, "Theme: %s", nm);
         break;
     }
+    case CMD_LSP_COMPLETE:      editor_lsp_complete(ed); break;
+    case CMD_LSP_GOTO_DEF:      editor_lsp_goto_definition(ed); break;
+    case CMD_LSP_HOVER:         editor_lsp_hover(ed); break;
+    case CMD_LSP_REFERENCES:    editor_lsp_references(ed); break;
+    case CMD_LSP_FORMAT:        editor_lsp_format(ed); break;
+    case CMD_LSP_RENAME:        editor_lsp_rename(ed); break;
+    case CMD_LSP_SIGNATURE:     editor_lsp_signature_help(ed); break;
     }
 }
 
@@ -3164,6 +3194,1179 @@ void editor_toggle_inline_diff(Editor *ed)
         ed->show_inline_diff = 0;
         git_diff_chunks_free(&ed->inline_diff);
         editor_set_status(ed, "Inline diff OFF.");
+    }
+}
+
+/* ============================================================================
+ * LSP
+ * ============================================================================ */
+
+/*
+ * lsp_language_id — map a SyntaxLang to an LSP languageId string.
+ *
+ * Returns NULL if the language is not supported for LSP.
+ */
+static const char *lsp_language_id(int lang)
+{
+    switch (lang) {
+        case 1: return "c";          /* LANG_C */
+        case 2: return "python";     /* LANG_PYTHON */
+        case 3: return "javascript"; /* LANG_JS */
+        case 4: return "rust";       /* LANG_RUST */
+        case 5: return "go";         /* LANG_GO */
+        default: return NULL;
+    }
+}
+
+/*
+ * lsp_find_server_command — look up the LSP server command for a language.
+ *
+ * Reads texty.json's "lsp_servers" object.  Returns a heap-allocated
+ * command string, or NULL if not configured.
+ */
+static char *lsp_find_server_command(Editor *ed, const char *lang_id)
+{
+    if (!lang_id) return NULL;
+
+    /* Determine the project root for finding texty.json */
+    char *root = get_repo_root(ed);
+    if (!root) return NULL;
+
+    char config_path[2048];
+    snprintf(config_path, sizeof(config_path), "%s/texty.json", root);
+
+    FILE *fp = fopen(config_path, "r");
+    if (!fp) { free(root); return NULL; }
+
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    if (size <= 0 || size > 8192) { fclose(fp); free(root); return NULL; }
+
+    char *json_text = malloc(size + 1);
+    if (!json_text) { fclose(fp); free(root); return NULL; }
+    int read_n = (int)fread(json_text, 1, size, fp);
+    fclose(fp);
+    json_text[read_n] = '\0';
+    free(root);
+
+    /* Parse the JSON */
+    JsonValue *config = json_parse(json_text, -1);
+    free(json_text);
+    if (!config) return NULL;
+
+    /* Look up lsp_servers.lang_id */
+    JsonValue *servers = json_get(config, "lsp_servers");
+    if (!servers) { json_free(config); return NULL; }
+
+    const char *cmd = json_get_string(json_get(servers, lang_id));
+    char *result = cmd ? strdup(cmd) : NULL;
+
+    json_free(config);
+    return result;
+}
+
+void editor_lsp_start(Editor *ed)
+{
+    if (ed->lsp_server) return;  /* already running */
+
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf || !buf->filename) return;
+
+    /* Detect language and find server command */
+    int lang = (int)syntax_detect_language(buf->filename);
+    const char *lang_id = lsp_language_id(lang);
+    if (!lang_id) return;  /* unsupported language */
+
+    char *cmd = lsp_find_server_command(ed, lang_id);
+    if (!cmd) return;  /* no server configured */
+
+    /* Determine workspace root */
+    char *root = get_repo_root(ed);
+    if (!root) root = strdup(".");
+
+    editor_set_status(ed, "LSP: starting %s...", cmd);
+    display_render(ed);
+
+    /* Start the server process */
+    ed->lsp_server = lsp_server_start(cmd, root);
+    free(cmd);
+
+    if (!ed->lsp_server) {
+        editor_set_status(ed, "LSP: failed to start server.");
+        free(root);
+        return;
+    }
+
+    /*
+     * Send the initialize request.
+     *
+     * The initialize request tells the server about our capabilities
+     * and the workspace root.  The server responds with its capabilities.
+     */
+    char params[4096];
+    char root_uri[2048];
+    lsp_path_to_uri(root, root_uri, sizeof(root_uri));
+    free(root);
+
+    snprintf(params, sizeof(params),
+        "{"
+        "  \"processId\": %d,"
+        "  \"rootUri\": \"%s\","
+        "  \"capabilities\": {"
+        "    \"textDocument\": {"
+        "      \"completion\": {\"completionItem\": {\"snippetSupport\": false}},"
+        "      \"synchronization\": {\"didSave\": true},"
+        "      \"hover\": {},"
+        "      \"definition\": {},"
+        "      \"publishDiagnostics\": {}"
+        "    }"
+        "  }"
+        "}",
+        (int)getpid(), root_uri);
+
+    lsp_send_request(ed->lsp_server, "initialize", params);
+    editor_set_status(ed, "LSP: initializing...");
+}
+
+void editor_lsp_stop(Editor *ed)
+{
+    if (!ed->lsp_server) return;
+
+    /*
+     * Send shutdown request, then exit notification.
+     * lsp_server_stop handles killing the process if needed.
+     */
+    lsp_send_request(ed->lsp_server, "shutdown", "null");
+    lsp_send_notification(ed->lsp_server, "exit", NULL);
+
+    lsp_server_stop(ed->lsp_server);
+    ed->lsp_server = NULL;
+    editor_set_status(ed, "LSP: stopped.");
+}
+
+void editor_lsp_did_open(Editor *ed)
+{
+    if (!ed->lsp_server || !ed->lsp_server->initialized) return;
+
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf || !buf->filename) return;
+
+    int lang = (int)syntax_detect_language(buf->filename);
+    const char *lang_id = lsp_language_id(lang);
+    if (!lang_id) lang_id = "plaintext";
+
+    /* Build the full file content as a JSON-escaped string */
+    char uri[2048];
+    lsp_path_to_uri(buf->filename, uri, sizeof(uri));
+
+    /*
+     * Collect all buffer text into one string for the didOpen notification.
+     * We need to JSON-escape it for safe embedding.
+     */
+    int total_len = 0;
+    for (int i = 0; i < buf->num_lines; i++)
+        total_len += buffer_line_len(buf, i) + 1;  /* +1 for \n */
+
+    char *text = malloc(total_len + 1);
+    if (!text) return;
+    int pos = 0;
+    for (int i = 0; i < buf->num_lines; i++) {
+        const char *line = buffer_get_line(buf, i);
+        int len = buffer_line_len(buf, i);
+        memcpy(text + pos, line, len);
+        pos += len;
+        if (i < buf->num_lines - 1)
+            text[pos++] = '\n';
+    }
+    text[pos] = '\0';
+
+    /* Escape the text for JSON */
+    int esc_size = pos * 4 + 1;  /* worst case: every char → \uXXXX */
+    char *escaped = malloc(esc_size);
+    if (!escaped) { free(text); return; }
+    json_escape_string(text, pos, escaped, esc_size);
+    free(text);
+
+    /* Build the params */
+    int params_size = (int)strlen(escaped) + 4096;
+    char *params = malloc(params_size);
+    if (!params) { free(escaped); return; }
+
+    snprintf(params, params_size,
+        "{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"%s\","
+        "\"version\":1,\"text\":\"%s\"}}",
+        uri, lang_id, escaped);
+    free(escaped);
+
+    lsp_send_notification(ed->lsp_server, "textDocument/didOpen", params);
+    free(params);
+}
+
+void editor_lsp_did_change(Editor *ed)
+{
+    if (!ed->lsp_server || !ed->lsp_server->initialized) return;
+
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf || !buf->filename) return;
+
+    char uri[2048];
+    lsp_path_to_uri(buf->filename, uri, sizeof(uri));
+
+    /* Full document sync: send entire buffer contents */
+    int total_len = 0;
+    for (int i = 0; i < buf->num_lines; i++)
+        total_len += buffer_line_len(buf, i) + 1;
+
+    char *text = malloc(total_len + 1);
+    if (!text) return;
+    int pos = 0;
+    for (int i = 0; i < buf->num_lines; i++) {
+        const char *line = buffer_get_line(buf, i);
+        int len = buffer_line_len(buf, i);
+        memcpy(text + pos, line, len);
+        pos += len;
+        if (i < buf->num_lines - 1)
+            text[pos++] = '\n';
+    }
+    text[pos] = '\0';
+
+    int esc_size = pos * 4 + 1;
+    char *escaped = malloc(esc_size);
+    if (!escaped) { free(text); return; }
+    json_escape_string(text, pos, escaped, esc_size);
+    free(text);
+
+    /* Increment a simple version counter using a static variable.
+     * A proper implementation would store this per-buffer. */
+    static int version = 2;
+
+    int params_size = (int)strlen(escaped) + 4096;
+    char *params = malloc(params_size);
+    if (!params) { free(escaped); return; }
+
+    snprintf(params, params_size,
+        "{\"textDocument\":{\"uri\":\"%s\",\"version\":%d},"
+        "\"contentChanges\":[{\"text\":\"%s\"}]}",
+        uri, version++, escaped);
+    free(escaped);
+
+    lsp_send_notification(ed->lsp_server, "textDocument/didChange", params);
+    free(params);
+}
+
+void editor_lsp_did_save(Editor *ed)
+{
+    if (!ed->lsp_server || !ed->lsp_server->initialized) return;
+
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf || !buf->filename) return;
+
+    char uri[2048];
+    lsp_path_to_uri(buf->filename, uri, sizeof(uri));
+
+    char params[4096];
+    snprintf(params, sizeof(params),
+        "{\"textDocument\":{\"uri\":\"%s\"}}", uri);
+
+    lsp_send_notification(ed->lsp_server, "textDocument/didSave", params);
+}
+
+/*
+ * handle_lsp_message — process one incoming LSP message.
+ *
+ * Dispatches based on the "method" field (for notifications) or
+ * the "id" field (for responses to our requests).
+ */
+static void handle_lsp_message(Editor *ed, const char *json_text)
+{
+    JsonValue *msg = json_parse(json_text, -1);
+    if (!msg) return;
+
+    /* Check if this is the initialize response */
+    JsonValue *id_val = json_get(msg, "id");
+    JsonValue *result = json_get(msg, "result");
+
+    if (id_val && result && !ed->lsp_server->initialized) {
+        /*
+         * Initialize response — extract server capabilities.
+         */
+        ed->lsp_server->initialized = 1;
+
+        JsonValue *caps = json_get(result, "capabilities");
+        if (caps) {
+            if (json_get(caps, "completionProvider"))
+                ed->lsp_server->has_completion = 1;
+            if (json_get_bool(json_get(caps, "definitionProvider"), 0)
+                    || json_get(caps, "definitionProvider"))
+                ed->lsp_server->has_definition = 1;
+            if (json_get_bool(json_get(caps, "hoverProvider"), 0)
+                    || json_get(caps, "hoverProvider"))
+                ed->lsp_server->has_hover = 1;
+            if (json_get_bool(json_get(caps, "referencesProvider"), 0)
+                    || json_get(caps, "referencesProvider"))
+                ed->lsp_server->has_references = 1;
+            if (json_get_bool(json_get(caps, "documentFormattingProvider"), 0)
+                    || json_get(caps, "documentFormattingProvider"))
+                ed->lsp_server->has_formatting = 1;
+            if (json_get_bool(json_get(caps, "renameProvider"), 0)
+                    || json_get(caps, "renameProvider"))
+                ed->lsp_server->has_rename = 1;
+        }
+
+        /* Send initialized notification (required by LSP spec) */
+        lsp_send_notification(ed->lsp_server, "initialized", "{}");
+
+        /* Now open the current document */
+        editor_lsp_did_open(ed);
+
+        editor_set_status(ed, "LSP: ready.");
+        json_free(msg);
+        return;
+    }
+
+    /* Check if this is a notification */
+    const char *method = json_get_string(json_get(msg, "method"));
+    if (method) {
+        if (strcmp(method, "textDocument/publishDiagnostics") == 0) {
+            /*
+             * Diagnostics notification — parse and store per-buffer.
+             *
+             * The notification includes a URI identifying the file.
+             * We find the matching buffer and update its diagnostics.
+             */
+            JsonValue *params = json_get(msg, "params");
+            const char *uri = json_get_string(json_get(params, "uri"));
+
+            if (uri) {
+                /* Convert URI to a file path */
+                char diag_path[2048];
+                lsp_uri_to_path(uri, diag_path, sizeof(diag_path));
+
+                /* Find the buffer for this file */
+                for (int b = 0; b < ed->num_buffers; b++) {
+                    Buffer *buf = ed->buffers[b];
+                    if (!buf || !buf->filename) continue;
+                    if (strcmp(buf->filename, diag_path) == 0) {
+                        /* Parse diagnostics into this buffer */
+                        lsp_parse_diagnostics(&buf->lsp_diagnostics, params);
+
+                        /* If this is the current buffer, show summary */
+                        if (b == ed->current_buffer) {
+                            int errs = 0, warns = 0;
+                            for (int d = 0; d < buf->lsp_diagnostics.count; d++) {
+                                if (buf->lsp_diagnostics.items[d].severity
+                                        == LSP_SEV_ERROR)
+                                    errs++;
+                                else
+                                    warns++;
+                            }
+                            if (errs > 0 || warns > 0)
+                                editor_set_status(ed,
+                                    "LSP: %d error(s), %d warning(s)",
+                                    errs, warns);
+                            else
+                                editor_set_status(ed, "LSP: no issues.");
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        /* Other notifications: window/logMessage, etc. — ignore for now */
+    }
+
+    json_free(msg);
+}
+
+/*
+ * lsp_wait_for_response — block until a response with the given ID arrives.
+ *
+ * Reads from the LSP pipe in a tight loop with a timeout.  Any notifications
+ * received while waiting are dispatched normally (e.g. diagnostics).
+ *
+ * Returns the parsed JSON response (caller must json_free), or NULL on timeout.
+ * Timeout is in milliseconds.
+ */
+static JsonValue *lsp_wait_for_response(Editor *ed, int request_id, int timeout_ms)
+{
+    if (!ed->lsp_server) return NULL;
+
+    int elapsed = 0;
+    int step = 10;  /* check every 10ms */
+
+    while (elapsed < timeout_ms) {
+        char *messages[16];
+        int count = lsp_read_messages(ed->lsp_server, messages, 16);
+
+        for (int i = 0; i < count; i++) {
+            JsonValue *msg = json_parse(messages[i], -1);
+            free(messages[i]);
+
+            if (!msg) continue;
+
+            /* Check if this is our response */
+            JsonValue *id_val = json_get(msg, "id");
+            if (id_val && json_get_int(id_val, -1) == request_id) {
+                /* Process any remaining messages as notifications */
+                for (int j = i + 1; j < count; j++) {
+                    handle_lsp_message(ed, messages[j]);
+                    free(messages[j]);
+                }
+                return msg;  /* caller frees */
+            }
+
+            /* Not our response — dispatch as notification */
+            const char *method = json_get_string(json_get(msg, "method"));
+            if (method) {
+                /* Re-serialize isn't ideal, but handle_lsp_message
+                 * needs the raw string. We can call the handler directly
+                 * with the parsed message's data. For now, just handle
+                 * diagnostics inline. */
+                if (strcmp(method, "textDocument/publishDiagnostics") == 0) {
+                    JsonValue *params = json_get(msg, "params");
+                    const char *uri = json_get_string(json_get(params, "uri"));
+                    if (uri) {
+                        char dpath[2048];
+                        lsp_uri_to_path(uri, dpath, sizeof(dpath));
+                        for (int b = 0; b < ed->num_buffers; b++) {
+                            Buffer *buf = ed->buffers[b];
+                            if (buf && buf->filename
+                                    && strcmp(buf->filename, dpath) == 0) {
+                                lsp_parse_diagnostics(&buf->lsp_diagnostics,
+                                                      params);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            json_free(msg);
+        }
+
+        if (count == 0) {
+            usleep(step * 1000);
+            elapsed += step;
+        }
+    }
+
+    return NULL;  /* timed out */
+}
+
+void editor_lsp_complete(Editor *ed)
+{
+    if (!ed->lsp_server || !ed->lsp_server->initialized) {
+        editor_set_status(ed, "LSP: no server running.");
+        return;
+    }
+    if (!ed->lsp_server->has_completion) {
+        editor_set_status(ed, "LSP: server doesn't support completion.");
+        return;
+    }
+
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf || !buf->filename) return;
+
+    /* Build the completion request params */
+    char uri[2048];
+    lsp_path_to_uri(buf->filename, uri, sizeof(uri));
+
+    char params[4096];
+    snprintf(params, sizeof(params),
+        "{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%d,\"character\":%d}}",
+        uri, ed->cursor_row, ed->cursor_col);
+
+    editor_set_status(ed, "LSP: completing...");
+    display_render(ed);
+
+    /* Send request and wait for response */
+    int req_id = lsp_send_request(ed->lsp_server,
+                                  "textDocument/completion", params);
+    if (req_id < 0) {
+        editor_set_status(ed, "LSP: failed to send completion request.");
+        return;
+    }
+
+    JsonValue *response = lsp_wait_for_response(ed, req_id, 3000);
+    if (!response) {
+        editor_set_status(ed, "LSP: completion timed out.");
+        return;
+    }
+
+    /* Parse completion items */
+    JsonValue *result = json_get(response, "result");
+    LspCompletionItem *items = malloc(LSP_MAX_COMPLETIONS
+                                      * sizeof(LspCompletionItem));
+    if (!items) { json_free(response); return; }
+
+    int num_items = lsp_parse_completions(items, LSP_MAX_COMPLETIONS, result);
+    json_free(response);
+
+    if (num_items == 0) {
+        free(items);
+        editor_set_status(ed, "LSP: no completions.");
+        return;
+    }
+
+    /*
+     * Build FinderFile entries from completion items so we can reuse
+     * the finder popup UI.
+     */
+    FinderFile *files = malloc(num_items * sizeof(FinderFile));
+    if (!files) { free(items); return; }
+
+    for (int i = 0; i < num_items; i++) {
+        if (items[i].detail[0])
+            snprintf(files[i].display, sizeof(files[i].display),
+                     "%s  %s", items[i].label, items[i].detail);
+        else
+            strncpy(files[i].display, items[i].label,
+                    sizeof(files[i].display) - 1);
+        files[i].display[sizeof(files[i].display) - 1] = '\0';
+
+        /* Store the insert text in the path field */
+        strncpy(files[i].path, items[i].insert_text,
+                sizeof(files[i].path) - 1);
+        files[i].path[sizeof(files[i].path) - 1] = '\0';
+    }
+
+    free(items);
+
+    /* Show the popup */
+    char *selected = display_finder_popup(ed, files, num_items);
+    free(files);
+
+    if (selected) {
+        /*
+         * Insert the completion text at the cursor.
+         *
+         * First, we need to remove the partial word the user already typed.
+         * Walk backward from the cursor to find the start of the word.
+         */
+        const char *line = buffer_get_line(buf, ed->cursor_row);
+        int word_start = ed->cursor_col;
+        while (word_start > 0 && (line[word_start - 1] == '_'
+               || (line[word_start - 1] >= 'a' && line[word_start - 1] <= 'z')
+               || (line[word_start - 1] >= 'A' && line[word_start - 1] <= 'Z')
+               || (line[word_start - 1] >= '0' && line[word_start - 1] <= '9')))
+            word_start--;
+
+        /* Delete the partial word */
+        for (int i = ed->cursor_col - 1; i >= word_start; i--)
+            buffer_delete_char(buf, ed->cursor_row, i);
+        ed->cursor_col = word_start;
+
+        /* Insert the completion text */
+        for (int i = 0; selected[i]; i++) {
+            buffer_insert_char(buf, ed->cursor_row, ed->cursor_col, selected[i]);
+            ed->cursor_col++;
+        }
+
+        free(selected);
+        editor_scroll(ed);
+
+        /* Notify LSP of the change */
+        editor_lsp_did_change(ed);
+    }
+
+    display_render(ed);
+}
+
+void editor_lsp_goto_definition(Editor *ed)
+{
+    if (!ed->lsp_server || !ed->lsp_server->initialized) {
+        editor_set_status(ed, "LSP: no server running.");
+        return;
+    }
+    if (!ed->lsp_server->has_definition) {
+        editor_set_status(ed, "LSP: server doesn't support go-to-definition.");
+        return;
+    }
+
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf || !buf->filename) return;
+
+    char uri[2048];
+    lsp_path_to_uri(buf->filename, uri, sizeof(uri));
+
+    char params[4096];
+    snprintf(params, sizeof(params),
+        "{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%d,\"character\":%d}}",
+        uri, ed->cursor_row, ed->cursor_col);
+
+    editor_set_status(ed, "LSP: finding definition...");
+    display_render(ed);
+
+    int req_id = lsp_send_request(ed->lsp_server,
+                                  "textDocument/definition", params);
+    if (req_id < 0) return;
+
+    JsonValue *response = lsp_wait_for_response(ed, req_id, 3000);
+    if (!response) {
+        editor_set_status(ed, "LSP: definition request timed out.");
+        return;
+    }
+
+    /*
+     * The result can be:
+     *   - A single Location object: {uri, range}
+     *   - An array of Location objects
+     *   - null (no definition found)
+     */
+    JsonValue *result = json_get(response, "result");
+    if (!result || result->type == JSON_NULL) {
+        json_free(response);
+        editor_set_status(ed, "LSP: no definition found.");
+        return;
+    }
+
+    /* Get the first location */
+    JsonValue *loc = result;
+    if (result->type == JSON_ARRAY) {
+        if (json_array_len(result) == 0) {
+            json_free(response);
+            editor_set_status(ed, "LSP: no definition found.");
+            return;
+        }
+        loc = json_array_get(result, 0);
+    }
+
+    const char *target_uri = json_get_string(json_get(loc, "uri"));
+    JsonValue *range = json_get(loc, "range");
+    JsonValue *start = json_get(range, "start");
+    int target_line = json_get_int(json_get(start, "line"), 0);
+    int target_col  = json_get_int(json_get(start, "character"), 0);
+
+    if (target_uri) {
+        char target_path[2048];
+        lsp_uri_to_path(target_uri, target_path, sizeof(target_path));
+
+        editor_open_or_switch(ed, target_path);
+
+        Buffer *target_buf = editor_current_buffer(ed);
+        ed->cursor_row = target_line;
+        if (target_buf && ed->cursor_row >= target_buf->num_lines)
+            ed->cursor_row = target_buf->num_lines - 1;
+        ed->cursor_col = target_col;
+        ed->desired_col = target_col;
+        editor_scroll(ed);
+
+        editor_set_status(ed, "Definition: %s:%d",
+                          target_path, target_line + 1);
+    }
+
+    json_free(response);
+}
+
+void editor_lsp_hover(Editor *ed)
+{
+    if (!ed->lsp_server || !ed->lsp_server->initialized) {
+        editor_set_status(ed, "LSP: no server running.");
+        return;
+    }
+    if (!ed->lsp_server->has_hover) {
+        editor_set_status(ed, "LSP: server doesn't support hover.");
+        return;
+    }
+
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf || !buf->filename) return;
+
+    char uri[2048];
+    lsp_path_to_uri(buf->filename, uri, sizeof(uri));
+
+    char params[4096];
+    snprintf(params, sizeof(params),
+        "{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%d,\"character\":%d}}",
+        uri, ed->cursor_row, ed->cursor_col);
+
+    int req_id = lsp_send_request(ed->lsp_server, "textDocument/hover", params);
+    if (req_id < 0) return;
+
+    JsonValue *response = lsp_wait_for_response(ed, req_id, 3000);
+    if (!response) {
+        editor_set_status(ed, "LSP: hover timed out.");
+        return;
+    }
+
+    JsonValue *result = json_get(response, "result");
+    if (!result || result->type == JSON_NULL) {
+        json_free(response);
+        editor_set_status(ed, "No documentation available.");
+        return;
+    }
+
+    /*
+     * The hover result has a "contents" field which can be:
+     *   - A string (plain text)
+     *   - A MarkupContent object: {kind: "markdown"|"plaintext", value: "..."}
+     *   - An array of strings/objects (deprecated but some servers use it)
+     */
+    const char *hover_text = NULL;
+    JsonValue *contents = json_get(result, "contents");
+    if (contents) {
+        if (contents->type == JSON_STRING) {
+            hover_text = json_get_string(contents);
+        } else if (contents->type == JSON_OBJECT) {
+            hover_text = json_get_string(json_get(contents, "value"));
+        } else if (contents->type == JSON_ARRAY && json_array_len(contents) > 0) {
+            JsonValue *first = json_array_get(contents, 0);
+            if (first->type == JSON_STRING)
+                hover_text = json_get_string(first);
+            else if (first->type == JSON_OBJECT)
+                hover_text = json_get_string(json_get(first, "value"));
+        }
+    }
+
+    if (hover_text && hover_text[0]) {
+        /*
+         * Show the hover text in a popup.  For simplicity, we use the
+         * finder popup with the text split into lines.
+         */
+        /* Count lines in hover text */
+        int num_lines = 1;
+        for (const char *p = hover_text; *p; p++)
+            if (*p == '\n') num_lines++;
+
+        FinderFile *files = malloc(num_lines * sizeof(FinderFile));
+        if (files) {
+            int idx = 0;
+            const char *line_start = hover_text;
+            for (const char *p = hover_text; ; p++) {
+                if (*p == '\n' || *p == '\0') {
+                    int len = (int)(p - line_start);
+                    if (len >= (int)sizeof(files[idx].display))
+                        len = (int)sizeof(files[idx].display) - 1;
+                    memcpy(files[idx].display, line_start, len);
+                    files[idx].display[len] = '\0';
+                    files[idx].path[0] = '\0';  /* no action on select */
+                    idx++;
+                    if (*p == '\0') break;
+                    line_start = p + 1;
+                }
+            }
+
+            display_finder_popup(ed, files, idx);
+            free(files);
+        }
+    } else {
+        editor_set_status(ed, "No documentation available.");
+    }
+
+    json_free(response);
+    display_render(ed);
+}
+
+void editor_lsp_references(Editor *ed)
+{
+    if (!ed->lsp_server || !ed->lsp_server->initialized) {
+        editor_set_status(ed, "LSP: no server running.");
+        return;
+    }
+    if (!ed->lsp_server->has_references) {
+        editor_set_status(ed, "LSP: server doesn't support references.");
+        return;
+    }
+
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf || !buf->filename) return;
+
+    char uri[2048];
+    lsp_path_to_uri(buf->filename, uri, sizeof(uri));
+
+    char params[4096];
+    snprintf(params, sizeof(params),
+        "{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%d,\"character\":%d},"
+        "\"context\":{\"includeDeclaration\":true}}",
+        uri, ed->cursor_row, ed->cursor_col);
+
+    editor_set_status(ed, "LSP: finding references...");
+    display_render(ed);
+
+    int req_id = lsp_send_request(ed->lsp_server,
+                                  "textDocument/references", params);
+    if (req_id < 0) return;
+
+    JsonValue *response = lsp_wait_for_response(ed, req_id, 5000);
+    if (!response) {
+        editor_set_status(ed, "LSP: references timed out.");
+        return;
+    }
+
+    JsonValue *result = json_get(response, "result");
+    if (!result || result->type != JSON_ARRAY || json_array_len(result) == 0) {
+        json_free(response);
+        editor_set_status(ed, "No references found.");
+        return;
+    }
+
+    int count = json_array_len(result);
+    FinderFile *files = malloc(count * sizeof(FinderFile));
+    if (!files) { json_free(response); return; }
+
+    for (int i = 0; i < count; i++) {
+        JsonValue *loc = json_array_get(result, i);
+        const char *loc_uri = json_get_string(json_get(loc, "uri"));
+        JsonValue *range = json_get(loc, "range");
+        JsonValue *start = json_get(range, "start");
+        int line = json_get_int(json_get(start, "line"), 0);
+
+        char path[2048];
+        if (loc_uri)
+            lsp_uri_to_path(loc_uri, path, sizeof(path));
+        else
+            path[0] = '\0';
+
+        /* Display: "filename:line" */
+        const char *basename = strrchr(path, '/');
+        basename = basename ? basename + 1 : path;
+        snprintf(files[i].display, sizeof(files[i].display),
+                 "%s:%d", basename, line + 1);
+        snprintf(files[i].path, sizeof(files[i].path),
+                 "%s:%d", path, line + 1);
+    }
+
+    json_free(response);
+
+    char *selected = display_finder_popup(ed, files, count);
+    free(files);
+
+    if (selected) {
+        /* Parse "filepath:line" */
+        char *colon = strrchr(selected, ':');
+        if (colon) {
+            *colon = '\0';
+            int target_line = atoi(colon + 1);
+            editor_open_or_switch(ed, selected);
+            Buffer *tbuf = editor_current_buffer(ed);
+            ed->cursor_row = target_line - 1;
+            if (tbuf && ed->cursor_row >= tbuf->num_lines)
+                ed->cursor_row = tbuf->num_lines - 1;
+            if (ed->cursor_row < 0) ed->cursor_row = 0;
+            ed->cursor_col = 0;
+            ed->desired_col = 0;
+            editor_scroll(ed);
+        }
+        free(selected);
+    }
+
+    display_render(ed);
+}
+
+void editor_lsp_format(Editor *ed)
+{
+    if (!ed->lsp_server || !ed->lsp_server->initialized) {
+        editor_set_status(ed, "LSP: no server running.");
+        return;
+    }
+    if (!ed->lsp_server->has_formatting) {
+        editor_set_status(ed, "LSP: server doesn't support formatting.");
+        return;
+    }
+
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf || !buf->filename) return;
+
+    char uri[2048];
+    lsp_path_to_uri(buf->filename, uri, sizeof(uri));
+
+    char params[4096];
+    snprintf(params, sizeof(params),
+        "{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"options\":{\"tabSize\":%d,\"insertSpaces\":true}}",
+        uri, ed->tab_width);
+
+    editor_set_status(ed, "LSP: formatting...");
+    display_render(ed);
+
+    int req_id = lsp_send_request(ed->lsp_server,
+                                  "textDocument/formatting", params);
+    if (req_id < 0) return;
+
+    JsonValue *response = lsp_wait_for_response(ed, req_id, 5000);
+    if (!response) {
+        editor_set_status(ed, "LSP: formatting timed out.");
+        return;
+    }
+
+    JsonValue *result = json_get(response, "result");
+    if (!result || result->type != JSON_ARRAY || json_array_len(result) == 0) {
+        json_free(response);
+        editor_set_status(ed, "No formatting changes.");
+        return;
+    }
+
+    /*
+     * Apply text edits in REVERSE order (bottom to top) so line numbers
+     * don't shift as we apply each edit.
+     *
+     * Each TextEdit has:
+     *   range: {start: {line, character}, end: {line, character}}
+     *   newText: string
+     *
+     * For simplicity with full-document formatting, many servers return
+     * a single edit replacing the entire file.  We handle both cases.
+     */
+    int num_edits = json_array_len(result);
+    int saved_row = ed->cursor_row;
+    int saved_col = ed->cursor_col;
+
+    /* Apply edits in reverse order */
+    for (int i = num_edits - 1; i >= 0; i--) {
+        JsonValue *edit = json_array_get(result, i);
+        JsonValue *range = json_get(edit, "range");
+        JsonValue *start = json_get(range, "start");
+        JsonValue *end_pos = json_get(range, "end");
+        const char *new_text = json_get_string(json_get(edit, "newText"));
+
+        if (!new_text) continue;
+
+        int start_line = json_get_int(json_get(start, "line"), 0);
+        int start_col  = json_get_int(json_get(start, "character"), 0);
+        int end_line   = json_get_int(json_get(end_pos, "line"), 0);
+        int end_col    = json_get_int(json_get(end_pos, "character"), 0);
+
+        /* Delete the range */
+        if (start_line < buf->num_lines && end_line < buf->num_lines)
+            buffer_delete_region(buf, start_line, start_col,
+                                end_line, end_col);
+
+        /* Insert the new text */
+        int ins_row = start_line;
+        int ins_col = start_col;
+        for (int c = 0; new_text[c]; c++) {
+            if (new_text[c] == '\n') {
+                buffer_insert_newline(buf, ins_row, ins_col);
+                ins_row++;
+                ins_col = 0;
+            } else {
+                buffer_insert_char(buf, ins_row, ins_col, new_text[c]);
+                ins_col++;
+            }
+        }
+    }
+
+    /* Restore cursor as close to original position as possible */
+    ed->cursor_row = saved_row;
+    if (ed->cursor_row >= buf->num_lines)
+        ed->cursor_row = buf->num_lines - 1;
+    ed->cursor_col = saved_col;
+    ed->desired_col = saved_col;
+    editor_scroll(ed);
+
+    json_free(response);
+
+    /* Notify LSP of the change */
+    editor_lsp_did_change(ed);
+    editor_set_status(ed, "Formatted.");
+}
+
+void editor_lsp_rename(Editor *ed)
+{
+    if (!ed->lsp_server || !ed->lsp_server->initialized) {
+        editor_set_status(ed, "LSP: no server running.");
+        return;
+    }
+    if (!ed->lsp_server->has_rename) {
+        editor_set_status(ed, "LSP: server doesn't support rename.");
+        return;
+    }
+
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf || !buf->filename) return;
+
+    /* Prompt for the new name */
+    char *new_name = display_prompt(ed, "Rename to: ");
+    if (!new_name || new_name[0] == '\0') {
+        free(new_name);
+        editor_set_status(ed, "Rename cancelled.");
+        return;
+    }
+
+    char uri[2048];
+    lsp_path_to_uri(buf->filename, uri, sizeof(uri));
+
+    /* Escape the new name for JSON */
+    char escaped_name[512];
+    json_escape_string(new_name, -1, escaped_name, sizeof(escaped_name));
+    free(new_name);
+
+    char params[4096];
+    snprintf(params, sizeof(params),
+        "{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%d,\"character\":%d},"
+        "\"newName\":\"%s\"}",
+        uri, ed->cursor_row, ed->cursor_col, escaped_name);
+
+    editor_set_status(ed, "LSP: renaming...");
+    display_render(ed);
+
+    int req_id = lsp_send_request(ed->lsp_server,
+                                  "textDocument/rename", params);
+    if (req_id < 0) return;
+
+    JsonValue *response = lsp_wait_for_response(ed, req_id, 5000);
+    if (!response) {
+        editor_set_status(ed, "LSP: rename timed out.");
+        return;
+    }
+
+    JsonValue *result = json_get(response, "result");
+    if (!result || result->type == JSON_NULL) {
+        json_free(response);
+        editor_set_status(ed, "LSP: rename failed (no result).");
+        return;
+    }
+
+    /*
+     * The result is a WorkspaceEdit with a "changes" object:
+     *   { "file:///path": [TextEdit, ...], ... }
+     *
+     * For each file, apply the edits.  We only handle files that are
+     * currently open — edits to other files are skipped with a warning.
+     */
+    JsonValue *changes = json_get(result, "changes");
+    int total_edits = 0;
+
+    if (changes && changes->type == JSON_OBJECT) {
+        for (int f = 0; f < changes->object.count; f++) {
+            const char *file_uri = changes->object.keys[f];
+            JsonValue *edits = changes->object.vals[f];
+
+            char file_path[2048];
+            lsp_uri_to_path(file_uri, file_path, sizeof(file_path));
+
+            /* Find the buffer for this file */
+            editor_open_or_switch(ed, file_path);
+            Buffer *target = editor_current_buffer(ed);
+            if (!target) continue;
+
+            /* Apply edits in reverse order */
+            int num_edits = json_array_len(edits);
+            for (int i = num_edits - 1; i >= 0; i--) {
+                JsonValue *edit = json_array_get(edits, i);
+                JsonValue *range = json_get(edit, "range");
+                JsonValue *start = json_get(range, "start");
+                JsonValue *end_pos = json_get(range, "end");
+                const char *new_text = json_get_string(
+                    json_get(edit, "newText"));
+                if (!new_text) continue;
+
+                int sl = json_get_int(json_get(start, "line"), 0);
+                int sc = json_get_int(json_get(start, "character"), 0);
+                int el = json_get_int(json_get(end_pos, "line"), 0);
+                int ec = json_get_int(json_get(end_pos, "character"), 0);
+
+                if (sl < target->num_lines && el < target->num_lines)
+                    buffer_delete_region(target, sl, sc, el, ec);
+
+                int ir = sl, ic = sc;
+                for (int c = 0; new_text[c]; c++) {
+                    if (new_text[c] == '\n') {
+                        buffer_insert_newline(target, ir, ic);
+                        ir++; ic = 0;
+                    } else {
+                        buffer_insert_char(target, ir, ic, new_text[c]);
+                        ic++;
+                    }
+                }
+                total_edits++;
+            }
+
+            editor_lsp_did_change(ed);
+        }
+    }
+
+    json_free(response);
+    editor_scroll(ed);
+    editor_set_status(ed, "Renamed: %d edit(s) applied.", total_edits);
+}
+
+void editor_lsp_signature_help(Editor *ed)
+{
+    if (!ed->lsp_server || !ed->lsp_server->initialized) {
+        editor_set_status(ed, "LSP: no server running.");
+        return;
+    }
+
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf || !buf->filename) return;
+
+    char uri[2048];
+    lsp_path_to_uri(buf->filename, uri, sizeof(uri));
+
+    char params[4096];
+    snprintf(params, sizeof(params),
+        "{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%d,\"character\":%d}}",
+        uri, ed->cursor_row, ed->cursor_col);
+
+    int req_id = lsp_send_request(ed->lsp_server,
+                                  "textDocument/signatureHelp", params);
+    if (req_id < 0) return;
+
+    JsonValue *response = lsp_wait_for_response(ed, req_id, 2000);
+    if (!response) {
+        editor_set_status(ed, "LSP: signature help timed out.");
+        return;
+    }
+
+    JsonValue *result = json_get(response, "result");
+    if (!result || result->type == JSON_NULL) {
+        json_free(response);
+        editor_set_status(ed, "No signature info available.");
+        return;
+    }
+
+    /*
+     * SignatureHelp has:
+     *   signatures: array of SignatureInformation
+     *   activeSignature: number
+     *   activeParameter: number
+     *
+     * Each SignatureInformation has:
+     *   label: string (e.g. "printf(const char *format, ...)")
+     *   parameters: array of ParameterInformation
+     */
+    JsonValue *sigs = json_get(result, "signatures");
+    int active_sig = json_get_int(json_get(result, "activeSignature"), 0);
+
+    if (!sigs || json_array_len(sigs) == 0) {
+        json_free(response);
+        editor_set_status(ed, "No signature info available.");
+        return;
+    }
+
+    JsonValue *sig = json_array_get(sigs, active_sig);
+    if (!sig) sig = json_array_get(sigs, 0);
+
+    const char *label = json_get_string(json_get(sig, "label"));
+    if (label && label[0])
+        editor_set_status(ed, "%s", label);
+    else
+        editor_set_status(ed, "No signature info available.");
+
+    json_free(response);
+}
+
+void editor_lsp_poll(Editor *ed)
+{
+    if (!ed->lsp_server) return;
+
+    /*
+     * Read any available messages from the server (non-blocking).
+     * lsp_read_messages returns 0 if no data is available.
+     */
+    char *messages[16];
+    int count = lsp_read_messages(ed->lsp_server, messages, 16);
+
+    for (int i = 0; i < count; i++) {
+        handle_lsp_message(ed, messages[i]);
+        free(messages[i]);
     }
 }
 

@@ -154,6 +154,14 @@ struct Editor;
 /** CPAIR_BUILD_SUCCESS — green text for "Build succeeded" header. */
 #define CPAIR_BUILD_SUCCESS 32
 
+/* ---- LSP diagnostics ------------------------------------------------------ */
+
+/** CPAIR_LSP_ERROR — red gutter marker for LSP errors. */
+#define CPAIR_LSP_ERROR      36
+
+/** CPAIR_LSP_WARNING — yellow gutter marker for LSP warnings. */
+#define CPAIR_LSP_WARNING    37
+
 /* ---- Fuzzy finder popup --------------------------------------------------- */
 
 /** CPAIR_FINDER_BORDER — border of the finder popup. */

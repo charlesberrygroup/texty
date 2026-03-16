@@ -19,7 +19,7 @@
 /* ---- Constants ------------------------------------------------------------ */
 
 /** Total number of color pair slots (1-indexed, matching CPAIR_* constants). */
-#define THEME_NUM_PAIRS   36
+#define THEME_NUM_PAIRS   38
 
 /** Maximum theme name length. */
 #define THEME_NAME_MAX    64

@@ -67,16 +67,18 @@ A cross-platform terminal IDE written in C, built in phases.
 
 ## Phase 4 — Advanced IDE
 
-### Language Server Protocol (LSP)
-- [ ] LSP client infrastructure (start/stop language servers)
-- [ ] Auto-completion with popup (Tab to accept)
-- [ ] Go-to-definition
-- [ ] Find all references
-- [ ] Hover documentation popup
-- [ ] Inline error / warning diagnostics
-- [ ] Code formatting
-- [ ] Rename symbol
-- [ ] Signature help for function calls
+### Language Server Protocol (LSP) ✅
+- [x] LSP client infrastructure (start/stop language servers)
+- [x] JSON parser for LSP protocol
+- [x] Message framing (Content-Length)
+- [x] Inline error / warning diagnostics (gutter + status bar)
+- [x] Auto-completion with popup (Ctrl+Space)
+- [x] Go-to-definition (F1)
+- [x] Find all references (command palette)
+- [x] Hover documentation popup (Ctrl+K)
+- [x] Code formatting (command palette)
+- [x] Rename symbol (command palette)
+- [x] Signature help (command palette)
 
 ### Embedded Terminal
 - [ ] Open terminal panel (Ctrl+`)
