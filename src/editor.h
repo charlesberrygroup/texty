@@ -707,6 +707,35 @@ void editor_recent_load(Editor *ed);
  */
 void editor_recent_save(Editor *ed);
 
+/* ---- Go-to-symbol --------------------------------------------------------- */
+
+/**
+ * editor_goto_symbol — show symbols in the current file (F7).
+ *
+ * Extracts function/struct/class/define symbols from the current buffer
+ * using simple pattern matching, shows them in the finder popup, and
+ * jumps to the selected symbol's line.
+ */
+void editor_goto_symbol(Editor *ed);
+
+/**
+ * editor_goto_workspace_symbol — show symbols across the project (Ctrl+T).
+ *
+ * Scans all files in the project for symbols, shows them in the finder
+ * popup with file:line info, and opens/jumps to the selected one.
+ */
+void editor_goto_workspace_symbol(Editor *ed);
+
+/* ---- Command palette ------------------------------------------------------ */
+
+/**
+ * editor_command_palette — show a searchable list of all commands (F8).
+ *
+ * Displays all available editor commands with their key bindings.
+ * The user can type to filter and press Enter to execute a command.
+ */
+void editor_command_palette(Editor *ed);
+
 /* ---- Fuzzy file finder ---------------------------------------------------- */
 
 /**

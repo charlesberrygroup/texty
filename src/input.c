@@ -828,6 +828,14 @@ void input_process_key(struct Editor *ed)
             editor_build(ed);
             break;
 
+        case KEY_F(7):         /* F7 — Go to symbol in file */
+            editor_goto_symbol(ed);
+            break;
+
+        case KEY_F(8):         /* F8 — Command palette */
+            editor_command_palette(ed);
+            break;
+
         case KEY_F(9):         /* F9 — Toggle git status panel */
             editor_toggle_git_panel(ed);
             break;
@@ -859,6 +867,10 @@ void input_process_key(struct Editor *ed)
 
         case CTRL('e'):        /* Ctrl+E — Recent files */
             editor_recent_files(ed);
+            break;
+
+        case CTRL('t'):        /* Ctrl+T — Go to symbol in workspace */
+            editor_goto_workspace_symbol(ed);
             break;
 
         case CTRL('b'):        /* Ctrl+B — Toggle file explorer panel */

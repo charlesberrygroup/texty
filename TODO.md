@@ -113,11 +113,11 @@ that all future phases will build on.
 - [x] Jump to error location from error panel (Enter on error)
 - [x] Configurable build command per project (texty.json)
 
-### Navigation & Search
+### Navigation & Search ✅
 - [x] Fuzzy file finder (Ctrl+P)
-- [ ] Go-to-symbol in file (Ctrl+Shift+O)
-- [ ] Go-to-symbol in workspace (Ctrl+T)
-- [ ] Command palette (Ctrl+Shift+P)
+- [x] Go-to-symbol in file (F7)
+- [x] Go-to-symbol in workspace (Ctrl+T)
+- [x] Command palette (F8)
 - [x] Recent files list (Ctrl+E)
 
 ### Configuration & Extensibility

@@ -107,4 +107,42 @@ int finder_filter(const FinderFile *files, int num_files,
                   const char *query,
                   FinderResult *results, int max_results);
 
+/* ---- Symbol extraction ---------------------------------------------------- */
+
+/** Maximum number of symbols extracted from a file. */
+#define FINDER_MAX_SYMBOLS 1024
+
+/*
+ * FinderSymbol — a symbol (function, struct, etc.) found in source code.
+ *
+ * Extracted by simple pattern matching, not a full parser.  Good enough
+ * for quick navigation without an LSP.
+ */
+typedef struct {
+    char name[128];     /* symbol name                                     */
+    int  line;          /* 1-based line number                             */
+    char kind;          /* 'f'=function 's'=struct 'e'=enum 'd'=define    */
+                        /* 'c'=class   't'=typedef 'm'=method             */
+} FinderSymbol;
+
+/**
+ * finder_extract_symbols — scan buffer lines for symbol definitions.
+ *
+ * Uses simple pattern matching (not a full parser) to detect function
+ * definitions, struct/enum/class declarations, #defines, etc.
+ *
+ * `lines`     — array of line strings (from buffer_get_line).
+ * `num_lines` — number of lines in the buffer.
+ * `lang`      — language identifier (from syntax_detect_language) for
+ *               language-specific patterns.  0 = generic/unknown.
+ * `symbols`   — output array.
+ * `max_syms`  — capacity of the output array.
+ *
+ * Returns the number of symbols found.
+ * Pure logic — no ncurses dependency.
+ */
+int finder_extract_symbols(const char **lines, int num_lines,
+                           int lang,
+                           FinderSymbol *symbols, int max_syms);
+
 #endif /* FINDER_H */

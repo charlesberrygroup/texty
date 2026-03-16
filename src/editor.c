@@ -15,7 +15,8 @@
 #include "filetree.h"   /* for FileTree, filetree_create, filetree_rebuild, etc. */
 #include "git.h"        /* for git_refresh — called on open/save */
 #include "build.h"      /* for build_run, build_load_config, etc. */
-#include "finder.h"     /* for finder_collect_files, FinderFile */
+#include "finder.h"     /* for finder_collect_files, FinderFile, FinderSymbol */
+#include "syntax.h"     /* for syntax_detect_language — used by goto_symbol */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -2323,6 +2324,387 @@ void editor_recent_files(Editor *ed)
 
     free(files);
     display_render(ed);
+}
+
+/* ============================================================================
+ * Go-to-symbol
+ * ============================================================================ */
+
+void editor_goto_symbol(Editor *ed)
+{
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf || buf->num_lines == 0) {
+        editor_set_status(ed, "No file open.");
+        return;
+    }
+
+    /*
+     * Build an array of line pointers for the symbol extractor.
+     * buffer_get_line() returns a const char* for each line.
+     */
+    const char **lines = malloc(buf->num_lines * sizeof(const char *));
+    if (!lines) return;
+    for (int i = 0; i < buf->num_lines; i++)
+        lines[i] = buffer_get_line(buf, i);
+
+    /* Detect language for language-specific patterns */
+    int lang = (int)syntax_detect_language(buf->filename);
+
+    /* Extract symbols */
+    FinderSymbol *syms = malloc(FINDER_MAX_SYMBOLS * sizeof(FinderSymbol));
+    if (!syms) { free(lines); return; }
+
+    int num_syms = finder_extract_symbols(lines, buf->num_lines, lang,
+                                          syms, FINDER_MAX_SYMBOLS);
+    free(lines);
+
+    if (num_syms == 0) {
+        free(syms);
+        editor_set_status(ed, "No symbols found in this file.");
+        return;
+    }
+
+    /*
+     * Build FinderFile entries from symbols so we can reuse the popup.
+     * display = "kind name :line"
+     * path = line number as string (we'll parse it back on selection)
+     */
+    FinderFile *files = malloc(num_syms * sizeof(FinderFile));
+    if (!files) { free(syms); return; }
+
+    for (int i = 0; i < num_syms; i++) {
+        const char *kind_str = "?";
+        switch (syms[i].kind) {
+            case 'f': kind_str = "fn"; break;
+            case 's': kind_str = "struct"; break;
+            case 'e': kind_str = "enum"; break;
+            case 'd': kind_str = "define"; break;
+            case 'c': kind_str = "class"; break;
+            case 't': kind_str = "typedef"; break;
+            case 'm': kind_str = "method"; break;
+        }
+        snprintf(files[i].display, sizeof(files[i].display),
+                 "%-6s %s :%d", kind_str, syms[i].name, syms[i].line);
+        snprintf(files[i].path, sizeof(files[i].path),
+                 "%d", syms[i].line);
+    }
+
+    char *selected = display_finder_popup(ed, files, num_syms);
+
+    if (selected) {
+        /* Parse the line number from the path field */
+        int target_line = atoi(selected);
+        free(selected);
+
+        if (target_line > 0) {
+            ed->cursor_row = target_line - 1;
+            if (ed->cursor_row >= buf->num_lines)
+                ed->cursor_row = buf->num_lines - 1;
+            ed->cursor_col  = 0;
+            ed->desired_col = 0;
+            editor_scroll(ed);
+        }
+    }
+
+    free(files);
+    free(syms);
+    display_render(ed);
+}
+
+void editor_goto_workspace_symbol(Editor *ed)
+{
+    /*
+     * Determine the project root and collect all source files.
+     */
+    char *root = get_repo_root(ed);
+    if (!root) {
+        Buffer *buf = editor_current_buffer(ed);
+        if (buf && buf->filename) {
+            char buf_dir[2048];
+            strncpy(buf_dir, buf->filename, sizeof(buf_dir) - 1);
+            buf_dir[sizeof(buf_dir) - 1] = '\0';
+            char *slash = strrchr(buf_dir, '/');
+            if (slash) *slash = '\0';
+            else strcpy(buf_dir, ".");
+            root = strdup(buf_dir);
+        } else {
+            root = strdup(".");
+        }
+    }
+
+    FinderFile *project_files = malloc(FINDER_MAX_FILES * sizeof(FinderFile));
+    if (!project_files) { free(root); return; }
+
+    int num_project = finder_collect_files(root, project_files, FINDER_MAX_FILES);
+
+    if (num_project == 0) {
+        free(project_files);
+        free(root);
+        editor_set_status(ed, "No files found in project.");
+        return;
+    }
+
+    /*
+     * Scan each file for symbols.  For performance, we read each file,
+     * extract symbols, and accumulate results.  We limit total symbols
+     * to keep things manageable.
+     */
+    editor_set_status(ed, "Scanning project for symbols...");
+    display_render(ed);
+
+    int max_total = FINDER_MAX_SYMBOLS;
+    FinderFile *sym_files = malloc(max_total * sizeof(FinderFile));
+    if (!sym_files) { free(project_files); free(root); return; }
+
+    FinderSymbol syms_buf[64];  /* per-file temporary buffer */
+    int total_syms = 0;
+
+    for (int f = 0; f < num_project && total_syms < max_total; f++) {
+        /* Read the file */
+        FILE *fp = fopen(project_files[f].path, "r");
+        if (!fp) continue;
+
+        /* Read lines into a temporary array */
+        char *file_lines[4096];
+        int num_lines = 0;
+        char line_buf[1024];
+        while (num_lines < 4096 && fgets(line_buf, sizeof(line_buf), fp)) {
+            /* Strip trailing newline */
+            int len = (int)strlen(line_buf);
+            if (len > 0 && line_buf[len - 1] == '\n') line_buf[len - 1] = '\0';
+            file_lines[num_lines] = strdup(line_buf);
+            num_lines++;
+        }
+        fclose(fp);
+
+        /* Detect language and extract symbols */
+        int lang = (int)syntax_detect_language(project_files[f].display);
+        int n = finder_extract_symbols((const char **)file_lines, num_lines,
+                                       lang, syms_buf, 64);
+
+        /* Add to the combined list */
+        for (int s = 0; s < n && total_syms < max_total; s++) {
+            const char *kind_str = "?";
+            switch (syms_buf[s].kind) {
+                case 'f': kind_str = "fn"; break;
+                case 's': kind_str = "struct"; break;
+                case 'e': kind_str = "enum"; break;
+                case 'd': kind_str = "define"; break;
+                case 'c': kind_str = "class"; break;
+            }
+            snprintf(sym_files[total_syms].display,
+                     sizeof(sym_files[total_syms].display),
+                     "%-6s %s  (%s:%d)",
+                     kind_str, syms_buf[s].name,
+                     project_files[f].display, syms_buf[s].line);
+            snprintf(sym_files[total_syms].path,
+                     sizeof(sym_files[total_syms].path),
+                     "%s:%d", project_files[f].path, syms_buf[s].line);
+            total_syms++;
+        }
+
+        /* Free temporary line copies */
+        for (int l = 0; l < num_lines; l++)
+            free(file_lines[l]);
+    }
+
+    free(project_files);
+    free(root);
+
+    if (total_syms == 0) {
+        free(sym_files);
+        editor_set_status(ed, "No symbols found in project.");
+        return;
+    }
+
+    char *selected = display_finder_popup(ed, sym_files, total_syms);
+
+    if (selected) {
+        /*
+         * Parse "filepath:line" from the path field.
+         * Find the last colon to split path from line number.
+         */
+        char *colon = strrchr(selected, ':');
+        if (colon) {
+            *colon = '\0';
+            int target_line = atoi(colon + 1);
+
+            editor_open_or_switch(ed, selected);
+
+            Buffer *buf = editor_current_buffer(ed);
+            if (buf && target_line > 0) {
+                ed->cursor_row = target_line - 1;
+                if (ed->cursor_row >= buf->num_lines)
+                    ed->cursor_row = buf->num_lines - 1;
+                ed->cursor_col  = 0;
+                ed->desired_col = 0;
+                editor_scroll(ed);
+            }
+        }
+        free(selected);
+    }
+
+    free(sym_files);
+    display_render(ed);
+}
+
+/* ============================================================================
+ * Command palette
+ * ============================================================================ */
+
+/*
+ * Command palette entry — a command name + key binding + action ID.
+ *
+ * The action ID is used to dispatch the command when selected.
+ * We use a simple enum-like integer.
+ */
+#define CMD_SAVE             1
+#define CMD_QUIT             2
+#define CMD_NEW_BUFFER       3
+#define CMD_OPEN_FILE        4
+#define CMD_CLOSE_BUFFER     5
+#define CMD_FIND             6
+#define CMD_FIND_NEXT        7
+#define CMD_FIND_PREV        8
+#define CMD_REPLACE          9
+#define CMD_GOTO_LINE       10
+#define CMD_UNDO            11
+#define CMD_REDO            12
+#define CMD_COPY            13
+#define CMD_CUT             14
+#define CMD_PASTE           15
+#define CMD_SELECT_ALL      16
+#define CMD_TOGGLE_TREE     17
+#define CMD_TOGGLE_WHITESPACE 18
+#define CMD_TOGGLE_WORDWRAP 19
+#define CMD_BUILD           20
+#define CMD_GIT_PANEL       21
+#define CMD_GIT_BLAME       22
+#define CMD_INLINE_DIFF     23
+#define CMD_STAGE_HUNK      24
+#define CMD_GIT_COMMIT      25
+#define CMD_FUZZY_FIND      26
+#define CMD_RECENT_FILES    27
+#define CMD_GOTO_SYMBOL     28
+#define CMD_WORKSPACE_SYMBOL 29
+#define CMD_NEXT_BUFFER     30
+#define CMD_PREV_BUFFER     31
+#define CMD_MARK_REGION     32
+#define CMD_COMMAND_PALETTE 33
+
+typedef struct {
+    const char *name;
+    const char *keys;
+    int         action;
+} PaletteEntry;
+
+static const PaletteEntry palette_commands[] = {
+    { "Save",                   "Ctrl+S",     CMD_SAVE },
+    { "Quit",                   "Ctrl+Q",     CMD_QUIT },
+    { "New Buffer",             "Ctrl+N",     CMD_NEW_BUFFER },
+    { "Open File",              "Ctrl+O",     CMD_OPEN_FILE },
+    { "Close Buffer",           "Ctrl+W",     CMD_CLOSE_BUFFER },
+    { "Next Buffer",            "Ctrl+]",     CMD_NEXT_BUFFER },
+    { "Previous Buffer",        "Ctrl+\\",    CMD_PREV_BUFFER },
+    { "Find",                   "Ctrl+F",     CMD_FIND },
+    { "Find Next",              "F3",         CMD_FIND_NEXT },
+    { "Find Previous",          "Shift+F3",   CMD_FIND_PREV },
+    { "Replace All",            "Ctrl+R",     CMD_REPLACE },
+    { "Go to Line",             "Ctrl+G",     CMD_GOTO_LINE },
+    { "Undo",                   "Ctrl+Z",     CMD_UNDO },
+    { "Redo",                   "Ctrl+Y",     CMD_REDO },
+    { "Copy",                   "Ctrl+C",     CMD_COPY },
+    { "Cut",                    "Ctrl+X",     CMD_CUT },
+    { "Paste",                  "Ctrl+V",     CMD_PASTE },
+    { "Select All",             "Ctrl+A",     CMD_SELECT_ALL },
+    { "Toggle File Explorer",   "Ctrl+B",     CMD_TOGGLE_TREE },
+    { "Toggle Whitespace",      "F2",         CMD_TOGGLE_WHITESPACE },
+    { "Toggle Word Wrap",       "F4",         CMD_TOGGLE_WORDWRAP },
+    { "Build",                  "F5",         CMD_BUILD },
+    { "Go to Symbol",           "F7",         CMD_GOTO_SYMBOL },
+    { "Command Palette",        "F8",         CMD_COMMAND_PALETTE },
+    { "Git Status Panel",       "F9",         CMD_GIT_PANEL },
+    { "Git Blame",              "Shift+F9",   CMD_GIT_BLAME },
+    { "Inline Diff",            "F10",        CMD_INLINE_DIFF },
+    { "Stage Hunk",             "F11",        CMD_STAGE_HUNK },
+    { "Git Commit",             "F12",        CMD_GIT_COMMIT },
+    { "Fuzzy File Finder",      "Ctrl+P",     CMD_FUZZY_FIND },
+    { "Recent Files",           "Ctrl+E",     CMD_RECENT_FILES },
+    { "Workspace Symbol",       "Ctrl+T",     CMD_WORKSPACE_SYMBOL },
+    { "Mark Region",            "Ctrl+U",     CMD_MARK_REGION },
+    { NULL, NULL, 0 }
+};
+
+void editor_command_palette(Editor *ed)
+{
+    /* Count commands */
+    int num_cmds = 0;
+    while (palette_commands[num_cmds].name) num_cmds++;
+
+    /* Build FinderFile entries: display = "Name  (Key)", path = action ID */
+    FinderFile *files = malloc(num_cmds * sizeof(FinderFile));
+    if (!files) return;
+
+    for (int i = 0; i < num_cmds; i++) {
+        snprintf(files[i].display, sizeof(files[i].display),
+                 "%-25s  %s",
+                 palette_commands[i].name,
+                 palette_commands[i].keys);
+        snprintf(files[i].path, sizeof(files[i].path),
+                 "%d", palette_commands[i].action);
+    }
+
+    char *selected = display_finder_popup(ed, files, num_cmds);
+    free(files);
+
+    if (!selected) {
+        display_render(ed);
+        return;
+    }
+
+    int action = atoi(selected);
+    free(selected);
+
+    /* Redraw before dispatching (clear the popup) */
+    display_render(ed);
+
+    /* Dispatch the selected command */
+    switch (action) {
+    case CMD_SAVE:              editor_save(ed); break;
+    case CMD_QUIT:              ed->should_quit = 1; break;
+    case CMD_NEW_BUFFER:        editor_new_buffer(ed); break;
+    case CMD_OPEN_FILE:         { char *p = display_prompt(ed, "Open file: ");
+                                  if (p && p[0]) editor_open_file(ed, p);
+                                  free(p); break; }
+    case CMD_CLOSE_BUFFER:      editor_close_buffer(ed); break;
+    case CMD_NEXT_BUFFER:       editor_next_buffer(ed); break;
+    case CMD_PREV_BUFFER:       editor_prev_buffer(ed); break;
+    case CMD_FIND:              editor_find(ed); break;
+    case CMD_FIND_NEXT:         editor_find_next(ed); break;
+    case CMD_FIND_PREV:         editor_find_prev(ed); break;
+    case CMD_REPLACE:           editor_replace(ed); break;
+    case CMD_GOTO_LINE:         editor_goto_line(ed); break;
+    case CMD_UNDO:              editor_undo(ed); break;
+    case CMD_REDO:              editor_redo(ed); break;
+    case CMD_COPY:              editor_copy(ed); break;
+    case CMD_CUT:               editor_cut(ed); break;
+    case CMD_PASTE:             editor_paste(ed); break;
+    case CMD_SELECT_ALL:        editor_select_all(ed); break;
+    case CMD_TOGGLE_TREE:       editor_toggle_filetree(ed); break;
+    case CMD_TOGGLE_WHITESPACE: editor_toggle_whitespace(ed); break;
+    case CMD_TOGGLE_WORDWRAP:   editor_toggle_word_wrap(ed); break;
+    case CMD_BUILD:             editor_build(ed); break;
+    case CMD_GOTO_SYMBOL:       editor_goto_symbol(ed); break;
+    case CMD_GIT_PANEL:         editor_toggle_git_panel(ed); break;
+    case CMD_GIT_BLAME:         editor_toggle_git_blame(ed); break;
+    case CMD_INLINE_DIFF:       editor_toggle_inline_diff(ed); break;
+    case CMD_STAGE_HUNK:        editor_stage_hunk(ed); break;
+    case CMD_GIT_COMMIT:        editor_git_commit(ed); break;
+    case CMD_FUZZY_FIND:        editor_fuzzy_find(ed); break;
+    case CMD_RECENT_FILES:      editor_recent_files(ed); break;
+    case CMD_WORKSPACE_SYMBOL:  editor_goto_workspace_symbol(ed); break;
+    case CMD_MARK_REGION:       editor_mark_region(ed); break;
+    }
 }
 
 /* ============================================================================

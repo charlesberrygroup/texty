@@ -29,6 +29,9 @@ A terminal-based IDE written in C, built from scratch.
 - File explorer panel (Ctrl+B) — browse, open, create, rename, and delete files
 - Fuzzy file finder (Ctrl+P) — type to filter, Enter to open, scored fuzzy matching
 - Recent files (Ctrl+E) — quick-pick from recently opened files, persisted across sessions
+- Go-to-symbol in file (F7) — jump to functions, structs, classes, defines
+- Go-to-symbol in workspace (Ctrl+T) — search symbols across all project files
+- Command palette (F8) — searchable list of all commands with key bindings
 - Build system integration (F5) — run build commands, parse errors, jump to error locations
 - Configurable build command via texty.json (`{"build_command": "make -j4"}`)
 - Git gutter — colored markers for added (+), modified (~), and deleted (_) lines
@@ -152,6 +155,9 @@ Produces the `./texty` binary.
 |------------------|-------------------------------------------------|
 | Ctrl+P           | Fuzzy file finder (type to filter, Enter to open)|
 | Ctrl+E           | Recent files (quick-pick from recently opened)   |
+| F7               | Go to symbol in current file                     |
+| Ctrl+T           | Go to symbol in workspace (all project files)    |
+| F8               | Command palette (search all commands)             |
 
 ### Build
 

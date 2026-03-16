@@ -320,6 +320,143 @@ TEST(test_collect_skips_obj_dir)
 }
 
 /* ============================================================================
+ * Symbol extraction
+ * ============================================================================ */
+
+TEST(test_symbols_c_function)
+{
+    const char *lines[] = {
+        "#include <stdio.h>",
+        "",
+        "int main(int argc, char **argv)",
+        "{",
+        "    return 0;",
+        "}",
+    };
+    FinderSymbol syms[32];
+    /* lang=1 is LANG_C */
+    int n = finder_extract_symbols(lines, 6, 1, syms, 32);
+    ASSERT(n >= 1, "at least one symbol found");
+
+    int found_main = 0;
+    for (int i = 0; i < n; i++)
+        if (strcmp(syms[i].name, "main") == 0) found_main = 1;
+    ASSERT(found_main, "found main()");
+}
+
+TEST(test_symbols_c_struct_and_define)
+{
+    const char *lines[] = {
+        "#define MAX_SIZE 100",
+        "",
+        "struct MyStruct {",
+        "    int x;",
+        "};",
+    };
+    FinderSymbol syms[32];
+    int n = finder_extract_symbols(lines, 5, 1, syms, 32);
+    ASSERT(n >= 2, "found define and struct");
+
+    int found_define = 0, found_struct = 0;
+    for (int i = 0; i < n; i++) {
+        if (strcmp(syms[i].name, "MAX_SIZE") == 0 && syms[i].kind == 'd')
+            found_define = 1;
+        if (strcmp(syms[i].name, "MyStruct") == 0 && syms[i].kind == 's')
+            found_struct = 1;
+    }
+    ASSERT(found_define, "found #define MAX_SIZE");
+    ASSERT(found_struct, "found struct MyStruct");
+}
+
+TEST(test_symbols_python)
+{
+    const char *lines[] = {
+        "import os",
+        "",
+        "class MyClass:",
+        "    def __init__(self):",
+        "        pass",
+        "",
+        "def helper():",
+        "    pass",
+    };
+    FinderSymbol syms[32];
+    /* lang=2 is LANG_PYTHON */
+    int n = finder_extract_symbols(lines, 8, 2, syms, 32);
+
+    int found_class = 0, found_def = 0;
+    for (int i = 0; i < n; i++) {
+        if (strcmp(syms[i].name, "MyClass") == 0) found_class = 1;
+        if (strcmp(syms[i].name, "helper") == 0) found_def = 1;
+    }
+    ASSERT(found_class, "found class MyClass");
+    ASSERT(found_def, "found def helper");
+}
+
+TEST(test_symbols_js_function)
+{
+    const char *lines[] = {
+        "function greet(name) {",
+        "  return 'hello ' + name;",
+        "}",
+        "",
+        "class App {",
+        "}",
+    };
+    FinderSymbol syms[32];
+    /* lang=3 is LANG_JS */
+    int n = finder_extract_symbols(lines, 6, 3, syms, 32);
+
+    int found_fn = 0, found_class = 0;
+    for (int i = 0; i < n; i++) {
+        if (strcmp(syms[i].name, "greet") == 0) found_fn = 1;
+        if (strcmp(syms[i].name, "App") == 0) found_class = 1;
+    }
+    ASSERT(found_fn, "found function greet");
+    ASSERT(found_class, "found class App");
+}
+
+TEST(test_symbols_skips_control_flow)
+{
+    const char *lines[] = {
+        "if (condition) {",
+        "for (int i = 0; i < n; i++) {",
+        "while (running) {",
+        "return result;",
+    };
+    FinderSymbol syms[32];
+    int n = finder_extract_symbols(lines, 4, 1, syms, 32);
+    ASSERT(n == 0, "control flow lines not detected as symbols");
+}
+
+TEST(test_symbols_null_input)
+{
+    FinderSymbol syms[32];
+    ASSERT(finder_extract_symbols(NULL, 0, 0, syms, 32) == 0,
+           "NULL input returns 0");
+}
+
+TEST(test_symbols_enum)
+{
+    const char *lines[] = {
+        "enum Color {",
+        "    RED,",
+        "    GREEN,",
+        "    BLUE",
+        "};",
+    };
+    FinderSymbol syms[32];
+    int n = finder_extract_symbols(lines, 5, 1, syms, 32);
+    ASSERT(n >= 1, "found enum");
+
+    int found = 0;
+    for (int i = 0; i < n; i++)
+        if (strcmp(syms[i].name, "Color") == 0 && syms[i].kind == 'e')
+            found = 1;
+    ASSERT(found, "found enum Color");
+}
+
+/* ============================================================================
  * main
  * ============================================================================ */
 
@@ -352,6 +489,15 @@ int main(void)
     RUN(test_collect_basic);
     RUN(test_collect_skips_hidden);
     RUN(test_collect_skips_obj_dir);
+
+    /* Symbol extraction */
+    RUN(test_symbols_c_function);
+    RUN(test_symbols_c_struct_and_define);
+    RUN(test_symbols_python);
+    RUN(test_symbols_js_function);
+    RUN(test_symbols_skips_control_flow);
+    RUN(test_symbols_null_input);
+    RUN(test_symbols_enum);
 
     TEST_SUMMARY();
 }
