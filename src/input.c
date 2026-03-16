@@ -24,6 +24,7 @@
 #include "git.h"       /* for git_blame_free — used by auto-clear blame */
 #include "build.h"     /* for BuildResult, BuildError — used by build panel */
 #include "theme.h"     /* for theme_cycle, display_apply_theme */
+#include "syntax.h"    /* for syntax_detect_language — used by auto-pair guard */
 
 #include <stdlib.h>    /* for free() */
 #include <stdio.h>     /* for fopen(), fclose() */
@@ -918,29 +919,74 @@ void input_process_key_with(struct Editor *ed, int key)
          * ------------------------------------------------------------------ */
 
         case '(':
-            editor_insert_pair(ed, '(', ')');
-            ed->status_msg[0] = '\0';
-            break;
-
         case '[':
-            editor_insert_pair(ed, '[', ']');
-            ed->status_msg[0] = '\0';
-            break;
-
         case '{':
-            editor_insert_pair(ed, '{', '}');
-            ed->status_msg[0] = '\0';
-            break;
-
         case '"':
-            editor_insert_pair(ed, '"', '"');
-            ed->status_msg[0] = '\0';
-            break;
-
         case '\'':
-            editor_insert_pair(ed, '\'', '\'');
+        case ')':
+        case ']':
+        case '}':
+        {
+            /*
+             * Smart bracket / quote handling for source code files.
+             *
+             * Three behaviours, checked in order:
+             *
+             *   1. Skip-over: if the character under the cursor is the same as
+             *      the key the user just typed, advance the cursor instead of
+             *      inserting a duplicate.  This lets the user "type through"
+             *      the closing character that was auto-inserted earlier.
+             *      Applies to all six closing chars: ) ] } " '
+             *      (" and ' count as closers when they already sit at the
+             *      cursor position.)
+             *
+             *   2. Auto-pair: for opening chars ( [ { " ' in a recognised
+             *      source code file, insert the opening AND closing character
+             *      and leave the cursor between them.
+             *
+             *   3. Plain insert: if neither condition above applies (e.g. the
+             *      file is plain text, or this is a closing bracket with no
+             *      match under the cursor), insert just the typed character.
+             */
+            Buffer     *pair_buf = editor_current_buffer(ed);
+            SyntaxLang  lang     = syntax_detect_language(
+                                       pair_buf ? pair_buf->filename : NULL);
+
+            /* --- 1. Skip-over: char under cursor matches the typed key --- */
+            if (lang != LANG_NONE && pair_buf) {
+                const char *cur_line = buffer_get_line(pair_buf,
+                                                       ed->cursor_row);
+                int         cur_len  = buffer_line_len(pair_buf,
+                                                       ed->cursor_row);
+                if (cur_line && ed->cursor_col < cur_len &&
+                    cur_line[ed->cursor_col] == (char)key &&
+                    (key == ')' || key == ']' || key == '}' ||
+                     key == '"' || key == '\'')) {
+                    /* Just move past the existing character */
+                    ed->cursor_col++;
+                    ed->status_msg[0] = '\0';
+                    break;
+                }
+            }
+
+            /* --- 2. Auto-pair for opening chars in source code files --- */
+            if (lang != LANG_NONE) {
+                switch (key) {
+                    case '(':  editor_insert_pair(ed, '(', ')');    break;
+                    case '[':  editor_insert_pair(ed, '[', ']');    break;
+                    case '{':  editor_insert_pair(ed, '{', '}');    break;
+                    case '"':  editor_insert_pair(ed, '"', '"');    break;
+                    case '\'': editor_insert_pair(ed, '\'', '\''); break;
+                    /* Closing-only chars that didn't match skip-over above */
+                    default:   editor_insert_char(ed, (char)key);  break;
+                }
+            } else {
+                /* --- 3. Not a source code file — plain insert --- */
+                editor_insert_char(ed, (char)key);
+            }
             ed->status_msg[0] = '\0';
             break;
+        }
 
         /* ------------------------------------------------------------------ *
          * Terminal resize
