@@ -1,6 +1,8 @@
 # texty
 
-A terminal-based IDE written in C, built from scratch.
+A terminal-based IDE written in C, built from scratch. Runs in the terminal (ncurses) or as a native GUI window (SDL2).
+
+![texty GUI](img/texty-gui.png)
 
 ## Features
 
@@ -62,8 +64,9 @@ A terminal-based IDE written in C, built from scratch.
 
 ## Requirements
 
-- macOS or Linux
+- macOS, Linux, or Windows
 - ncurses (`libncurses-dev` on Debian/Ubuntu, `ncurses-devel` on Fedora)
+- **Optional (for GUI mode):** SDL2 + SDL2\_ttf (`brew install sdl2 sdl2_ttf` on macOS, `sudo apt install libsdl2-dev libsdl2-ttf-dev` on Linux)
 
 ## Build
 
@@ -71,12 +74,13 @@ A terminal-based IDE written in C, built from scratch.
 make
 ```
 
-Produces the `./texty` binary.
+Produces the `./texty` binary. If SDL2 and SDL2\_ttf are installed, GUI support is compiled in automatically.
 
 ## Usage
 
 ```sh
-./texty [filename]
+./texty [filename]       # terminal UI (ncurses)
+./texty -G [filename]    # graphical UI (SDL2 window)
 ```
 
 ## Configuration
@@ -251,6 +255,7 @@ src/
   buffer.h/c    — Text buffer (array of lines)
   editor.h/c    — Editor state, cursor movement, text operations
   display.h/c   — ncurses terminal rendering
+  gui.h/c       — SDL2 graphical frontend (./texty -G)
   input.h/c     — Keyboard input dispatch
   undo.h/c      — Undo / redo stack
   syntax.h/c    — Syntax highlighting
