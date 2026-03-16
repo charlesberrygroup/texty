@@ -2,7 +2,11 @@
 
 A terminal-based IDE written in C, built from scratch. Runs in the terminal (ncurses) or as a native GUI window (SDL2).
 
+## GUI
 ![texty GUI](img/texty-gui.png)
+
+## CLI
+![texty CLI](img/texty-cli.png)
 
 ## Features
 
