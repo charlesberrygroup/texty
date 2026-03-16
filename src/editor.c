@@ -1645,7 +1645,81 @@ void editor_select_all(Editor *ed)
 
 /* ============================================================================
  * Clipboard: copy, cut, paste
+ *
+ * System clipboard integration
+ * ----------------------------
+ * In addition to the internal clipboard (ed->clipboard), we also push/pull
+ * to the system clipboard so copy/paste works between texty and other apps.
+ *
+ * On macOS: pbcopy / pbpaste
+ * On Linux: xclip -selection clipboard
+ *
+ * If the system clipboard command is not available, we silently fall back to
+ * the internal clipboard only.
  * ============================================================================ */
+
+/*
+ * clipboard_to_system — push the internal clipboard to the OS clipboard.
+ *
+ * Uses popen() to pipe text into pbcopy (macOS) or xclip (Linux).
+ * Silently does nothing if the command is not available.
+ */
+static void clipboard_to_system(const char *text)
+{
+    if (!text || !text[0]) return;
+
+    /*
+     * Try pbcopy first (macOS), then xclip (Linux).
+     * popen() returns NULL if the command cannot be executed.
+     */
+    FILE *fp = popen("pbcopy 2>/dev/null", "w");
+    if (!fp)
+        fp = popen("xclip -selection clipboard 2>/dev/null", "w");
+    if (!fp) return;
+
+    fwrite(text, 1, strlen(text), fp);
+    pclose(fp);
+}
+
+/*
+ * clipboard_from_system — read the OS clipboard into a heap-allocated string.
+ *
+ * Uses popen() to read from pbpaste (macOS) or xclip (Linux).
+ * Returns a heap-allocated string (caller must free), or NULL if the
+ * system clipboard is empty or the command is not available.
+ */
+static char *clipboard_from_system(void)
+{
+    FILE *fp = popen("pbpaste 2>/dev/null", "r");
+    if (!fp)
+        fp = popen("xclip -selection clipboard -o 2>/dev/null", "r");
+    if (!fp) return NULL;
+
+    /*
+     * Read the clipboard contents into a dynamically growing buffer.
+     * Start with 4 KB and double as needed.
+     */
+    int cap = 4096;
+    int len = 0;
+    char *buf = malloc(cap);
+    if (!buf) { pclose(fp); return NULL; }
+
+    int ch;
+    while ((ch = fgetc(fp)) != EOF) {
+        if (len + 1 >= cap) {
+            cap *= 2;
+            char *tmp = realloc(buf, cap);
+            if (!tmp) { free(buf); pclose(fp); return NULL; }
+            buf = tmp;
+        }
+        buf[len++] = (char)ch;
+    }
+    pclose(fp);
+
+    if (len == 0) { free(buf); return NULL; }
+    buf[len] = '\0';
+    return buf;
+}
 
 void editor_copy(Editor *ed)
 {
@@ -1663,6 +1737,9 @@ void editor_copy(Editor *ed)
     /* Replace the existing clipboard contents */
     free(ed->clipboard);
     ed->clipboard = text;
+
+    /* Also push to the system clipboard for cross-app copy/paste */
+    clipboard_to_system(ed->clipboard);
 
     editor_set_status(ed, "Copied.");
     /* Leave the selection active so the user can see what was copied */
@@ -1726,6 +1803,9 @@ void editor_cut(Editor *ed)
     editor_selection_clear(ed);
     editor_scroll(ed);
 
+    /* Also push to the system clipboard for cross-app copy/paste */
+    clipboard_to_system(ed->clipboard);
+
     editor_set_status(ed, "Cut.");
 }
 
@@ -1734,6 +1814,13 @@ void editor_paste(Editor *ed)
     Buffer *buf = editor_current_buffer(ed);
     if (!buf) return;
 
+    /*
+     * If the internal clipboard is empty, try the system clipboard.
+     * This lets the user paste text copied from other applications.
+     */
+    if (!ed->clipboard) {
+        ed->clipboard = clipboard_from_system();
+    }
     if (!ed->clipboard) {
         editor_set_status(ed, "Clipboard is empty.");
         return;

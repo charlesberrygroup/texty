@@ -61,6 +61,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <termios.h>   /* for tcgetattr/tcsetattr — disable ISIG after halfdelay */
+#include <unistd.h>    /* for STDIN_FILENO */
 #include <ncurses.h>   /* for halfdelay, getch, ERR */
 
 int main(int argc, char *argv[])
@@ -158,6 +160,23 @@ int main(int argc, char *argv[])
      * The loop exits when any input handler sets ed.should_quit = 1.
      */
     halfdelay(1);  /* getch() returns ERR after 100ms (1 tenth of a second) */
+
+    /*
+     * halfdelay() internally uses cbreak() mode, which RE-ENABLES the
+     * terminal's ISIG flag.  This undoes raw()'s signal suppression:
+     * Ctrl+C would generate SIGINT (killing the editor) instead of
+     * passing character 0x03 to getch().
+     *
+     * Fix: clear ISIG from the terminal attributes after halfdelay().
+     * This preserves the 100ms timeout but prevents signal generation,
+     * so Ctrl+C reaches getch() as a normal keypress (code 3 = copy).
+     */
+    {
+        struct termios t;
+        tcgetattr(STDIN_FILENO, &t);
+        t.c_lflag &= ~ISIG;
+        tcsetattr(STDIN_FILENO, TCSANOW, &t);
+    }
 
     while (!ed.should_quit) {
         display_render(&ed);

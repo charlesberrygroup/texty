@@ -52,6 +52,7 @@
 #include "input.h"     /* for input_process_key_with */
 #include "lsp.h"
 
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1687,6 +1688,15 @@ static void gui_update_size_impl(struct Editor *ed)
 
 int gui_main(int argc, char *argv[])
 {
+    /*
+     * Ignore SIGINT so Ctrl+C does not kill the process.
+     *
+     * In the TUI, ncurses' raw() prevents Ctrl+C from generating SIGINT.
+     * In the GUI, ncurses is never initialized, so without this the
+     * default SIGINT handler would terminate the process on Ctrl+C.
+     */
+    signal(SIGINT, SIG_IGN);
+
     /* ---- Initialize SDL2 ---- */
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         fprintf(stderr, "texty: SDL_Init failed: %s\n", SDL_GetError());
@@ -1804,6 +1814,16 @@ int gui_main(int argc, char *argv[])
     SDL_StartTextInput();
 
     /* ---- Main Event Loop ---- */
+
+    /*
+     * suppress_text_input — when a Ctrl+key combo is handled via
+     * SDL_KEYDOWN, we set this flag so the next SDL_TEXTINPUT event
+     * is ignored.  On macOS, Ctrl+V can cause the system text input
+     * layer to fire SDL_TEXTINPUT with system clipboard contents,
+     * which we do not want (we handle paste ourselves).
+     */
+    int suppress_text_input = 0;
+
     while (!ed.should_quit) {
         /* Render the current state */
         gui_render();
@@ -1834,20 +1854,63 @@ int gui_main(int argc, char *argv[])
                 case SDL_KEYDOWN: {
                     int mapped = sdl_to_ncurses_key(event.key.keysym);
                     if (mapped >= 0) {
+                        /*
+                         * System clipboard integration.
+                         *
+                         * The TUI uses an internal clipboard (ed.clipboard)
+                         * because terminals have no direct clipboard access.
+                         * In the GUI, we bridge the system clipboard:
+                         *
+                         *   Ctrl+V: load system clipboard → ed.clipboard
+                         *           BEFORE input.c calls editor_paste.
+                         *
+                         *   Ctrl+C / Ctrl+X: let input.c call editor_copy /
+                         *           editor_cut, THEN push ed.clipboard to
+                         *           the system clipboard.
+                         */
+                        if (mapped == GUI_CTRL('v')) {
+                            char *sys = SDL_GetClipboardText();
+                            if (sys && sys[0]) {
+                                free(ed.clipboard);
+                                ed.clipboard = strdup(sys);
+                            }
+                            SDL_free(sys);
+                        }
+
                         input_process_key_with(&ed, mapped);
+
+                        if (mapped == GUI_CTRL('c')
+                            || mapped == GUI_CTRL('x')) {
+                            if (ed.clipboard)
+                                SDL_SetClipboardText(ed.clipboard);
+                        }
+
+                        /*
+                         * Suppress the next SDL_TEXTINPUT — on macOS the
+                         * text input system can generate spurious text
+                         * events for Ctrl+key combos (especially Ctrl+V).
+                         */
+                        suppress_text_input = 1;
                     }
                     break;
                 }
 
                 case SDL_TEXTINPUT: {
                     /*
-                     * SDL_TEXTINPUT fires for printable characters AFTER
-                     * SDL_KEYDOWN.  Ctrl+key does NOT generate TEXTINPUT,
-                     * so there is no conflict.
-                     *
-                     * We pass each character to input_process_key_with so
-                     * auto-close brackets and other character-level logic
-                     * in input.c works correctly.
+                     * If we just handled a Ctrl+key combo, skip this
+                     * event — it may contain system clipboard contents
+                     * or control characters we don't want inserted.
+                     */
+                    if (suppress_text_input) {
+                        suppress_text_input = 0;
+                        break;
+                    }
+
+                    /*
+                     * Normal printable character input.  We pass each
+                     * character to input_process_key_with so auto-close
+                     * brackets and other character-level logic in
+                     * input.c works correctly.
                      */
                     for (int i = 0; event.text.text[i]; i++) {
                         unsigned char c = (unsigned char)event.text.text[i];
