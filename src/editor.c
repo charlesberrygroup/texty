@@ -2315,9 +2315,9 @@ static char *recent_files_path(void)
     mkdir(parent, 0755);  /* ignore error if exists */
     mkdir(dir, 0755);     /* ignore error if exists */
 
-    char *path = malloc(1024);
+    char *path = malloc(2048);
     if (!path) return NULL;
-    snprintf(path, 1024, "%s/recent_files", dir);
+    snprintf(path, 2048, "%s/recent_files", dir);
     return path;
 }
 
@@ -2594,12 +2594,12 @@ void editor_goto_workspace_symbol(Editor *ed)
             }
             snprintf(sym_files[total_syms].display,
                      sizeof(sym_files[total_syms].display),
-                     "%-6s %s  (%s:%d)",
+                     "%-6s %.120s  (%.860s:%d)",
                      kind_str, syms_buf[s].name,
                      project_files[f].display, syms_buf[s].line);
             snprintf(sym_files[total_syms].path,
                      sizeof(sym_files[total_syms].path),
-                     "%s:%d", project_files[f].path, syms_buf[s].line);
+                     "%.1010s:%d", project_files[f].path, syms_buf[s].line);
             total_syms++;
         }
 
@@ -4112,9 +4112,9 @@ void editor_lsp_references(Editor *ed)
         const char *basename = strrchr(path, '/');
         basename = basename ? basename + 1 : path;
         snprintf(files[i].display, sizeof(files[i].display),
-                 "%s:%d", basename, line + 1);
+                 "%.1010s:%d", basename, line + 1);
         snprintf(files[i].path, sizeof(files[i].path),
-                 "%s:%d", path, line + 1);
+                 "%.1010s:%d", path, line + 1);
     }
 
     json_free(response);

@@ -35,7 +35,7 @@ OBJDIR  = obj
 #       always exposes strdup regardless of the C standard flag, which is
 #       why this bug only appeared on Linux.
 # --------------------------------------------------------------------------
-CFLAGS  = -Wall -Wextra -std=c99 -g -Isrc -D_POSIX_C_SOURCE=200809L
+CFLAGS  = -Wall -Wextra -std=c99 -g -Isrc -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE
 
 # --------------------------------------------------------------------------
 # Platform detection — link the right ncurses library

@@ -1187,7 +1187,7 @@ static void draw_build_panel(struct Editor *ed)
          * Format: " filepath:line: message"
          * Truncated to fit the terminal width.
          */
-        char line_buf[512];
+        char line_buf[2048];
         if (e->col > 0)
             snprintf(line_buf, sizeof(line_buf), " %s:%d:%d: %s",
                      e->filepath, e->line, e->col, e->message);
