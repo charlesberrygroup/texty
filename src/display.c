@@ -36,6 +36,7 @@ static char *(*s_prompt_override)(struct Editor *, const char *) = NULL;
 static char *(*s_finder_override)(struct Editor *, FinderFile *, int) = NULL;
 static void  (*s_theme_override)(const void *) = NULL;
 static void  (*s_size_override)(struct Editor *) = NULL;
+static void  (*s_render_override)(struct Editor *) = NULL;
 
 void display_set_prompt_handler(char *(*fn)(struct Editor *, const char *))
 {
@@ -55,6 +56,11 @@ void display_set_theme_handler(void (*fn)(const void *))
 void display_set_size_handler(void (*fn)(struct Editor *))
 {
     s_size_override = fn;
+}
+
+void display_set_render_handler(void (*fn)(struct Editor *))
+{
+    s_render_override = fn;
 }
 
 /* ============================================================================
@@ -2025,6 +2031,12 @@ static void draw_status_bar(struct Editor *ed)
 
 void display_render(struct Editor *ed)
 {
+    /* If a GUI override is installed, use it instead of ncurses */
+    if (s_render_override) {
+        s_render_override(ed);
+        return;
+    }
+
     /*
      * erase() is like clear() but does not move the cursor and avoids
      * the full-screen flicker that clear() can cause.

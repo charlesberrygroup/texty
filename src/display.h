@@ -266,5 +266,6 @@ void display_set_prompt_handler(char *(*fn)(struct Editor *, const char *));
 void display_set_finder_handler(char *(*fn)(struct Editor *, FinderFile *, int));
 void display_set_theme_handler(void (*fn)(const void *));
 void display_set_size_handler(void (*fn)(struct Editor *));
+void display_set_render_handler(void (*fn)(struct Editor *));
 
 #endif /* DISPLAY_H */

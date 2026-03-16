@@ -1407,6 +1407,21 @@ static void gui_apply_theme_impl(const void *theme_ptr)
     gui_cache_theme_colors();
 }
 
+/*
+ * gui_render_and_present — render override for display_render().
+ *
+ * editor.c calls display_render() during blocking operations (LSP start,
+ * build, etc.) to show status messages.  In the GUI, we redirect this to
+ * render a full frame and present it.
+ */
+static void gui_render_impl(struct Editor *ed)
+{
+    (void)ed;
+    if (!g_gui || !g_gui->renderer) return;
+    gui_render();
+    SDL_RenderPresent(g_gui->renderer);
+}
+
 /* ============================================================================
  * SDL Key → ncurses Key Mapping
  *
@@ -1753,6 +1768,7 @@ int gui_main(int argc, char *argv[])
     display_set_finder_handler(gui_finder_impl);
     display_set_theme_handler(gui_apply_theme_impl);
     display_set_size_handler(gui_update_size_impl);
+    display_set_render_handler(gui_render_impl);
 
     /* ---- Cache theme colors ---- */
     gui_cache_theme_colors();
