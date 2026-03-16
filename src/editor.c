@@ -238,6 +238,10 @@ void editor_init(Editor *ed)
     /* Load recent files from disk */
     editor_recent_load(ed);
 
+    /* Initialize themes (built-in defaults + user themes from disk) */
+    theme_init(&ed->theme_mgr);
+    theme_load_from_disk(&ed->theme_mgr);
+
     /* editor_new_buffer will be called by the caller (main.c) */
 }
 
@@ -2591,6 +2595,7 @@ void editor_goto_workspace_symbol(Editor *ed)
 #define CMD_PREV_BUFFER     31
 #define CMD_MARK_REGION     32
 #define CMD_COMMAND_PALETTE 33
+#define CMD_CYCLE_THEME    34
 
 typedef struct {
     const char *name;
@@ -2632,6 +2637,7 @@ static const PaletteEntry palette_commands[] = {
     { "Recent Files",           "Ctrl+E",     CMD_RECENT_FILES },
     { "Workspace Symbol",       "Ctrl+T",     CMD_WORKSPACE_SYMBOL },
     { "Mark Region",            "Ctrl+U",     CMD_MARK_REGION },
+    { "Cycle Theme",            "F6",         CMD_CYCLE_THEME },
     { NULL, NULL, 0 }
 };
 
@@ -2704,6 +2710,12 @@ void editor_command_palette(Editor *ed)
     case CMD_RECENT_FILES:      editor_recent_files(ed); break;
     case CMD_WORKSPACE_SYMBOL:  editor_goto_workspace_symbol(ed); break;
     case CMD_MARK_REGION:       editor_mark_region(ed); break;
+    case CMD_CYCLE_THEME:       {
+        const char *nm = theme_cycle(&ed->theme_mgr);
+        display_apply_theme(theme_active(&ed->theme_mgr));
+        editor_set_status(ed, "Theme: %s", nm);
+        break;
+    }
     }
 }
 

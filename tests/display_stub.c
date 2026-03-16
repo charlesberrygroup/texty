@@ -51,6 +51,14 @@ void display_update_size(struct Editor *ed)
  *
  * editor_fuzzy_find() calls this.  In tests, it returns NULL (user cancelled).
  */
+/*
+ * display_apply_theme — no-op in tests (no ncurses color pairs).
+ */
+void display_apply_theme(const void *theme_ptr)
+{
+    (void)theme_ptr;
+}
+
 char *display_finder_popup(struct Editor *ed, FinderFile *files, int num_files)
 {
     (void)ed;

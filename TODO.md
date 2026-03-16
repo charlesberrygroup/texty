@@ -123,7 +123,7 @@ that all future phases will build on.
 ### Configuration & Extensibility
 - [ ] Config file (~/.config/texty/config.toml)
 - [ ] Custom key bindings
-- [ ] Theme support (color schemes)
+- [x] Theme support (color schemes)
 - [ ] Plugin system (dynamic shared libraries)
 - [ ] Per-project settings (texty.json in project root)
 

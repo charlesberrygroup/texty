@@ -228,6 +228,17 @@ char *display_prompt(struct Editor *ed, const char *prompt);
  * Returns a heap-allocated absolute file path (caller must free),
  * or NULL if the user cancelled with Escape.
  */
+/**
+ * display_apply_theme — re-register all ncurses color pairs from a theme.
+ *
+ * Calls init_pair() for every CPAIR_* constant using the colors defined
+ * in the given theme.  Skips CPAIR_DEFAULT and CPAIR_CURLINE (macOS
+ * ncurses bug workaround).
+ *
+ * Call this after theme_init() / theme_cycle() / theme_set_by_name().
+ */
+void display_apply_theme(const void *theme_ptr);
+
 char *display_finder_popup(struct Editor *ed,
                            FinderFile *files, int num_files);
 

@@ -17,6 +17,7 @@
 #include "git.h"        /* for GitLineStatus, GitState */
 #include "build.h"      /* for BuildResult, BuildError */
 #include "finder.h"     /* for FinderFile, FinderResult, finder_filter, etc. */
+#include "theme.h"      /* for Theme, ThemeColorDef */
 
 #include <ncurses.h>
 #include <stdlib.h>    /* for malloc, free — used by display_finder_popup */
@@ -213,6 +214,58 @@ void display_cleanup(void)
      * was called.  Always call this before exiting.
      */
     endwin();
+}
+
+/* ============================================================================
+ * display_apply_theme — set ncurses color pairs from a Theme struct
+ * ============================================================================ */
+
+void display_apply_theme(const void *theme_ptr)
+{
+    /*
+     * theme_ptr is a const Theme* passed as void* to avoid including theme.h
+     * in display.h (which would create a circular dependency).
+     */
+    const Theme *t = (const Theme *)theme_ptr;
+    if (!t) return;
+
+    /*
+     * Set the terminal's default foreground and background colors.
+     *
+     * assume_default_colors(fg, bg) tells ncurses what the terminal's
+     * "default" colors are.  This affects:
+     *   - Color pair 0 (the default pair used by A_NORMAL)
+     *   - Any color pair that uses -1 (terminal default) for fg or bg
+     *
+     * For example, if default_bg = BLACK, then all text rendered with
+     * the default background (-1) will appear on a black background,
+     * even if the user's terminal is set to a light background.
+     *
+     * The value -1 means "keep whatever the terminal already has" —
+     * so the Default Dark theme (-1, -1) respects the user's terminal
+     * settings, while Gruvbox/Monokai force a dark background.
+     */
+    assume_default_colors(t->default_fg, t->default_bg);
+
+    /*
+     * Re-register every color pair.  init_pair() can be called at any time
+     * after start_color(), and the new colors take effect on the next refresh.
+     *
+     * Skip CPAIR_DEFAULT (1) and CPAIR_CURLINE (5) — these are intentionally
+     * NOT registered with init_pair() due to a macOS ncurses bug where -1
+     * (terminal default) is misinterpreted as COLOR_BLACK.  Normal text uses
+     * attrset(A_NORMAL) and cursor line uses A_REVERSE instead.
+     */
+    for (int i = 2; i <= THEME_NUM_PAIRS; i++) {
+        if (i == CPAIR_CURLINE) continue;  /* skip — uses A_REVERSE */
+        init_pair(i, t->pairs[i].fg, t->pairs[i].bg);
+    }
+
+    /*
+     * Force a full screen redraw so the new background color is visible
+     * everywhere, not just where text is drawn.
+     */
+    bkgd(COLOR_PAIR(0));
 }
 
 /* ============================================================================

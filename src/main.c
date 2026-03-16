@@ -51,6 +51,7 @@
 #include "editor.h"
 #include "display.h"
 #include "input.h"
+#include "theme.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -72,6 +73,14 @@ int main(int argc, char *argv[])
      */
     display_init();
     display_update_size(&ed);
+
+    /*
+     * Apply the active theme.  theme_init() was called inside editor_init()
+     * which loaded built-in themes and user themes from disk.  Now we
+     * re-register all ncurses color pairs to match the active theme.
+     * This overrides the defaults set in display_init().
+     */
+    display_apply_theme(theme_active(&ed.theme_mgr));
 
     /* ---------------------------------------------------------------------- *
      * 3. Open a file or create an empty buffer

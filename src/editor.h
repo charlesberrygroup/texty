@@ -19,6 +19,7 @@
 
 #include "buffer.h"
 #include "build.h"
+#include "theme.h"
 #include <stdarg.h>
 
 /*
@@ -321,6 +322,11 @@ typedef struct Editor {
      */
     char    *recent_files[RECENT_FILES_MAX];
     int      recent_count;
+
+    /* ---- Theme ------------------------------------------------------------ */
+
+    /** theme_mgr — holds all available themes and the active selection. */
+    ThemeManager theme_mgr;
 } Editor;
 
 /* ---- Lifecycle ------------------------------------------------------------ */

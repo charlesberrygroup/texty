@@ -32,6 +32,7 @@ A terminal-based IDE written in C, built from scratch.
 - Go-to-symbol in file (F7) — jump to functions, structs, classes, defines
 - Go-to-symbol in workspace (Ctrl+T) — search symbols across all project files
 - Command palette (F8) — searchable list of all commands with key bindings
+- Color themes (F6) — cycle between Default Dark, Default Light, Monokai; load custom themes from ~/.config/texty/themes/
 - Build system integration (F5) — run build commands, parse errors, jump to error locations
 - Configurable build command via texty.json (`{"build_command": "make -j4"}`)
 - Git gutter — colored markers for added (+), modified (~), and deleted (_) lines
@@ -155,6 +156,7 @@ Produces the `./texty` binary.
 |------------------|-------------------------------------------------|
 | Ctrl+P           | Fuzzy file finder (type to filter, Enter to open)|
 | Ctrl+E           | Recent files (quick-pick from recently opened)   |
+| F6               | Cycle color theme                                |
 | F7               | Go to symbol in current file                     |
 | Ctrl+T           | Go to symbol in workspace (all project files)    |
 | F8               | Command palette (search all commands)             |
@@ -228,6 +230,7 @@ src/
   git.h/c       — Git integration (gutter, blame, diff, staging, commit)
   build.h/c     — Build system (run command, parse errors, config)
   finder.h/c    — Fuzzy file finder (directory walk, scoring, filtering)
+  theme.h/c     — Color theme support (built-in themes, parsing, cycling)
 Makefile
 TODO.md         — Phased development roadmap
 ```

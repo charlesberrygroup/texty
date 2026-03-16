@@ -23,6 +23,7 @@
 #include "filetree.h"  /* for FileTree, FlatEntry, filetree_toggle, etc. */
 #include "git.h"       /* for git_blame_free — used by auto-clear blame */
 #include "build.h"     /* for BuildResult, BuildError — used by build panel */
+#include "theme.h"     /* for theme_cycle, display_apply_theme */
 
 #include <stdlib.h>    /* for free() */
 #include <stdio.h>     /* for fopen(), fclose() */
@@ -827,6 +828,14 @@ void input_process_key(struct Editor *ed)
         case KEY_F(5):         /* F5 — Build (run build command) */
             editor_build(ed);
             break;
+
+        case KEY_F(6):         /* F6 — Cycle color theme */
+        {
+            const char *name = theme_cycle(&ed->theme_mgr);
+            display_apply_theme(theme_active(&ed->theme_mgr));
+            editor_set_status(ed, "Theme: %s", name);
+            break;
+        }
 
         case KEY_F(7):         /* F7 — Go to symbol in file */
             editor_goto_symbol(ed);
