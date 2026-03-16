@@ -6,7 +6,7 @@ A terminal-based IDE written in C, built from scratch. Runs in the terminal (ncu
 ![texty GUI](img/texty-gui.png)
 
 ## CLI
-![texty CLI](img/texty-cli.png)
+![texty CLI](img/texty-cli2.png)
 
 ## Features
 
