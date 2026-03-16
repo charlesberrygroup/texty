@@ -187,6 +187,17 @@ typedef struct {
     /* The theme's default fg/bg (replaces -1 in color definitions) */
     GuiRGB        theme_fg;
     GuiRGB        theme_bg;
+
+    /*
+     * Mouse drag state for click-and-drag text selection.
+     *
+     * When the user presses the left mouse button in the text area,
+     * drag_active is set to 1 and stays active until the button is
+     * released.  While dragging, mouse motion events extend the
+     * editor's selection from the anchor (where the click started)
+     * to the current mouse position.
+     */
+    int           drag_active;
 } GuiState;
 
 /*
@@ -1677,7 +1688,69 @@ static int sdl_to_ncurses_key(SDL_Keysym ks)
 
 /* ============================================================================
  * Mouse Handling
+ *
+ * Click-and-drag text selection:
+ *   - MOUSEBUTTONDOWN in the text area sets the selection anchor and starts
+ *     tracking the drag (drag_active = 1).
+ *   - MOUSEMOTION while dragging moves the cursor, extending the selection
+ *     from anchor to current position.
+ *   - MOUSEBUTTONUP ends the drag.  The selection stays active so the user
+ *     can copy/cut/mark-region.
+ *   - Shift+click extends the existing selection (or starts one from the
+ *     current cursor) to the click position without resetting the anchor.
  * ============================================================================ */
+
+/*
+ * gui_pixel_to_buffer_pos — convert pixel coordinates to buffer row/col.
+ *
+ * Returns 1 if the pixel is inside the text editing area, 0 otherwise.
+ * On success, *out_row and *out_col are set to the clamped buffer position.
+ *
+ * This helper is used by both the click handler and the drag handler so
+ * the coordinate math lives in one place.
+ */
+static int gui_pixel_to_buffer_pos(int px, int py, int *out_row, int *out_col)
+{
+    Editor *ed = g_gui->editor;
+    int cw = g_gui->char_width;
+    int ch = g_gui->char_height;
+
+    /* Calculate text area origin (left edge and top edge in pixels) */
+    int text_x = 0;
+    if (ed->show_filetree) text_x += FILETREE_WIDTH * cw;
+    text_x += GUTTER_WIDTH * cw;
+    if (ed->show_git_blame && ed->git_blame.count > 0)
+        text_x += BLAME_WIDTH * cw;
+
+    int text_y = GUI_CONTENT_TOP;
+
+    /* Must be inside the text area */
+    if (px < text_x || py < text_y)
+        return 0;
+
+    /* Convert pixel offset within text area to character row/col */
+    int row = (py - text_y) / ch;
+    int col = (px - text_x) / cw;
+
+    int buf_row = ed->view_row + row;
+    int buf_col = ed->view_col + col;
+
+    /* Clamp to buffer bounds */
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf) return 0;
+
+    if (buf_row >= buf->num_lines)
+        buf_row = buf->num_lines - 1;
+    if (buf_row < 0) buf_row = 0;
+
+    int ll = buffer_line_len(buf, buf_row);
+    if (buf_col > ll) buf_col = ll;
+    if (buf_col < 0)  buf_col = 0;
+
+    *out_row = buf_row;
+    *out_col = buf_col;
+    return 1;
+}
 
 static void gui_handle_mouse(SDL_Event *event)
 {
@@ -1694,6 +1767,32 @@ static void gui_handle_mouse(SDL_Event *event)
             if (ed->view_row < 0) ed->view_row = 0;
             int max_view = buf->num_lines - 1;
             if (ed->view_row > max_view) ed->view_row = max_view;
+        }
+        return;
+    }
+
+    /* ---- Mouse button released — end any drag in progress ---- */
+    if (event->type == SDL_MOUSEBUTTONUP
+        && event->button.button == SDL_BUTTON_LEFT) {
+        g_gui->drag_active = 0;
+        return;
+    }
+
+    /* ---- Mouse motion while dragging — extend selection ---- */
+    if (event->type == SDL_MOUSEMOTION && g_gui->drag_active) {
+        int buf_row, buf_col;
+        if (gui_pixel_to_buffer_pos(event->motion.x, event->motion.y,
+                                    &buf_row, &buf_col)) {
+            /*
+             * Move the cursor to the new position.  The selection anchor
+             * was set on MOUSEBUTTONDOWN and stays fixed — the selection
+             * spans from anchor to cursor.
+             */
+            ed->cursor_row  = buf_row;
+            ed->cursor_col  = buf_col;
+            ed->desired_col = buf_col;
+            ed->sel_active  = 1;   /* ensure selection stays on */
+            editor_scroll(ed);
         }
         return;
     }
@@ -1831,48 +1930,61 @@ static void gui_handle_mouse(SDL_Event *event)
             }
         }
 
-        /* ---- Click in text area — position cursor ---- */
+        /* ---- Click in text area — position cursor and start drag ---- */
         {
-            /* Calculate text area origin */
-            int text_x = 0;
-            if (ed->show_filetree) text_x += FILETREE_WIDTH * cw;
-            text_x += GUTTER_WIDTH * cw;
-            if (ed->show_git_blame && ed->git_blame.count > 0)
-                text_x += BLAME_WIDTH * cw;
+            int buf_row, buf_col;
+            if (gui_pixel_to_buffer_pos(mx, my, &buf_row, &buf_col)) {
 
-            int text_y = GUI_CONTENT_TOP;
+                /*
+                 * Check if Shift is held.  Shift+click extends the selection
+                 * from the current cursor (or existing anchor) to the click
+                 * position — just like Shift+Arrow but via mouse.
+                 */
+                int shift = (SDL_GetModState() & KMOD_SHIFT) != 0;
 
-            if (mx >= text_x && my >= text_y) {
-                int row = (my - text_y) / ch;
-                int col = (mx - text_x) / cw;
-
-                int new_row = ed->view_row + row;
-                int new_col = ed->view_col + col;
-
-                Buffer *buf = editor_current_buffer(ed);
-                if (buf) {
-                    /* Clamp to buffer bounds */
-                    if (new_row >= buf->num_lines)
-                        new_row = buf->num_lines - 1;
-                    if (new_row < 0) new_row = 0;
-
-                    int ll = buffer_line_len(buf, new_row);
-                    if (new_col > ll) new_col = ll;
-                    if (new_col < 0) new_col = 0;
-
-                    /* Clear selection on plain click */
+                if (shift) {
+                    /*
+                     * Shift+click: if no selection is active yet, set the
+                     * anchor at the current cursor position (the user is
+                     * saying "from here to there").  Then move cursor to
+                     * the clicked position.
+                     */
+                    if (!ed->sel_active) {
+                        ed->sel_anchor_row = ed->cursor_row;
+                        ed->sel_anchor_col = ed->cursor_col;
+                    }
+                    ed->sel_active  = 1;
+                    ed->cursor_row  = buf_row;
+                    ed->cursor_col  = buf_col;
+                    ed->desired_col = buf_col;
+                } else {
+                    /*
+                     * Plain click: clear any existing selection, move
+                     * cursor to clicked position, and set the selection
+                     * anchor here in case the user drags.
+                     */
                     editor_selection_clear(ed);
 
-                    ed->cursor_row  = new_row;
-                    ed->cursor_col  = new_col;
-                    ed->desired_col = new_col;
-                    editor_scroll(ed);
-
-                    /* Return focus to editor */
-                    ed->filetree_focus = 0;
-                    ed->git_panel_focus = 0;
-                    ed->build_panel_focus = 0;
+                    ed->cursor_row      = buf_row;
+                    ed->cursor_col      = buf_col;
+                    ed->desired_col     = buf_col;
+                    ed->sel_anchor_row  = buf_row;
+                    ed->sel_anchor_col  = buf_col;
                 }
+
+                /*
+                 * Start tracking the drag.  If the user releases without
+                 * moving, no selection is created (anchor == cursor).  If
+                 * they drag, MOUSEMOTION will extend the selection.
+                 */
+                g_gui->drag_active = 1;
+
+                editor_scroll(ed);
+
+                /* Return focus to editor */
+                ed->filetree_focus = 0;
+                ed->git_panel_focus = 0;
+                ed->build_panel_focus = 0;
             }
         }
     }
@@ -2133,6 +2245,8 @@ int gui_main(int argc, char *argv[])
                 }
 
                 case SDL_MOUSEBUTTONDOWN:
+                case SDL_MOUSEBUTTONUP:
+                case SDL_MOUSEMOTION:
                 case SDL_MOUSEWHEEL:
                     gui_handle_mouse(&event);
                     break;
