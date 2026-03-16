@@ -61,12 +61,27 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <locale.h>    /* for setlocale — required for UTF-8 support in ncurses */
 #include <termios.h>   /* for tcgetattr/tcsetattr — disable ISIG after halfdelay */
 #include <unistd.h>    /* for STDIN_FILENO */
 #include <ncurses.h>   /* for halfdelay, getch, ERR */
 
 int main(int argc, char *argv[])
 {
+    /* ---------------------------------------------------------------------- *
+     * Set locale for UTF-8 support
+     *
+     * ncurses needs to know the terminal's character encoding to correctly
+     * handle multi-byte UTF-8 characters (accented letters, CJK, symbols).
+     * Without this call, ncurses assumes single-byte characters and renders
+     * multi-byte UTF-8 as boxes or question marks.
+     *
+     * setlocale(LC_ALL, "") reads the user's locale from environment
+     * variables (LANG, LC_ALL).  On modern systems this is typically
+     * "en_US.UTF-8" or similar.  Must be called BEFORE initscr().
+     * ---------------------------------------------------------------------- */
+    setlocale(LC_ALL, "");
+
     /* ---------------------------------------------------------------------- *
      * Check for -G flag (GUI mode)
      *

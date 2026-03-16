@@ -266,6 +266,78 @@ TEST(test_get_line_out_of_bounds)
 }
 
 /* ============================================================================
+ * UTF-8 byte length helper
+ *
+ * This is a copy of the static utf8_byte_len() from display.c / gui.c so
+ * we can unit-test the logic here.  If this function is ever extracted to a
+ * shared header, replace this copy with an #include.
+ * ============================================================================ */
+
+static int utf8_byte_len(unsigned char c)
+{
+    if (c < 0x80) return 1;
+    if (c < 0xC0) return 1;
+    if (c < 0xE0) return 2;
+    if (c < 0xF0) return 3;
+    return 4;
+}
+
+TEST(test_utf8_byte_len_ascii)
+{
+    /*
+     * ASCII bytes (0x00–0x7F) are single-byte characters.
+     * Test a few representative values: NUL, space, 'A', DEL.
+     */
+    ASSERT(utf8_byte_len(0x00) == 1, "NUL is 1 byte");
+    ASSERT(utf8_byte_len(' ')  == 1, "space is 1 byte");
+    ASSERT(utf8_byte_len('A')  == 1, "'A' is 1 byte");
+    ASSERT(utf8_byte_len(0x7F) == 1, "0x7F (DEL) is 1 byte");
+}
+
+TEST(test_utf8_byte_len_continuation)
+{
+    /*
+     * Continuation bytes (0x80–0xBF) should never appear as a leading byte.
+     * We return 1 so the renderer safely skips past them.
+     */
+    ASSERT(utf8_byte_len(0x80) == 1, "0x80 continuation → 1");
+    ASSERT(utf8_byte_len(0xBF) == 1, "0xBF continuation → 1");
+}
+
+TEST(test_utf8_byte_len_two_byte)
+{
+    /*
+     * Two-byte sequences have lead bytes 0xC0–0xDF.
+     * Examples: é (C3 A9), ñ (C3 B1), ü (C3 BC).
+     */
+    ASSERT(utf8_byte_len(0xC0) == 2, "0xC0 → 2 bytes");
+    ASSERT(utf8_byte_len(0xC3) == 2, "0xC3 (é lead) → 2 bytes");
+    ASSERT(utf8_byte_len(0xDF) == 2, "0xDF → 2 bytes");
+}
+
+TEST(test_utf8_byte_len_three_byte)
+{
+    /*
+     * Three-byte sequences have lead bytes 0xE0–0xEF.
+     * Examples: € (E2 82 AC), 中 (E4 B8 AD), → (E2 86 92).
+     */
+    ASSERT(utf8_byte_len(0xE0) == 3, "0xE0 → 3 bytes");
+    ASSERT(utf8_byte_len(0xE2) == 3, "0xE2 (€ lead) → 3 bytes");
+    ASSERT(utf8_byte_len(0xEF) == 3, "0xEF → 3 bytes");
+}
+
+TEST(test_utf8_byte_len_four_byte)
+{
+    /*
+     * Four-byte sequences have lead bytes 0xF0–0xF7.
+     * Examples: 😀 (F0 9F 98 80), 𝕳 (F0 9D 95 B3).
+     */
+    ASSERT(utf8_byte_len(0xF0) == 4, "0xF0 (emoji lead) → 4 bytes");
+    ASSERT(utf8_byte_len(0xF4) == 4, "0xF4 → 4 bytes");
+    ASSERT(utf8_byte_len(0xF7) == 4, "0xF7 → 4 bytes");
+}
+
+/* ============================================================================
  * main
  * ============================================================================ */
 
@@ -294,6 +366,12 @@ int main(void)
 
     RUN(test_line_len_out_of_bounds);
     RUN(test_get_line_out_of_bounds);
+
+    RUN(test_utf8_byte_len_ascii);
+    RUN(test_utf8_byte_len_continuation);
+    RUN(test_utf8_byte_len_two_byte);
+    RUN(test_utf8_byte_len_three_byte);
+    RUN(test_utf8_byte_len_four_byte);
 
     TEST_SUMMARY();
 }

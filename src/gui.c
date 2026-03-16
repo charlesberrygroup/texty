@@ -19,7 +19,7 @@
  *
  * TEXT RENDERING
  * --------------
- * Text is rendered using SDL2_ttf (TTF_RenderText_Blended) in runs of
+ * Text is rendered using SDL2_ttf (TTF_RenderUTF8_Blended) in runs of
  * characters that share the same syntax color.  A monospace font ensures
  * every character occupies the same pixel width, making column calculations
  * trivial: pixel_x = column * char_width.
@@ -73,8 +73,63 @@
 #define GUI_DEFAULT_HEIGHT  800    /* Initial window height in pixels          */
 #define GUI_FONT_SIZE       15     /* Font size in points                     */
 #define GUI_TAB_HEIGHT      28     /* Tab bar height in pixels                */
+#define GUI_TOOLBAR_HEIGHT  26     /* Toolbar height in pixels                */
 #define GUI_STATUS_HEIGHT   26     /* Status bar height in pixels             */
 #define GUI_CURSOR_WIDTH    2      /* Cursor bar width in pixels              */
+
+/*
+ * GUI_CONTENT_TOP — the y-coordinate where editor content begins.
+ *
+ * The tab bar occupies the top GUI_TAB_HEIGHT pixels, and the toolbar
+ * sits directly below it.  All panels and the text area start at this
+ * y-offset.
+ */
+#define GUI_CONTENT_TOP     (GUI_TAB_HEIGHT + GUI_TOOLBAR_HEIGHT)
+
+/* ============================================================================
+ * Toolbar Button Definitions
+ *
+ * Each button has a label, the key code it dispatches when clicked, and a
+ * separator flag.  When `separator` is 1, a small gap is drawn BEFORE this
+ * button to visually group related actions.
+ *
+ * Key codes use the same CTRL(x) encoding as input.c — the ASCII control
+ * character for the given letter.  Function keys use ncurses KEY_F().
+ * ============================================================================ */
+
+#define CTRL_KEY(x)  ((x) & 0x1F)
+
+typedef struct {
+    const char *label;     /* button text (short — 2–7 chars)           */
+    int         key;       /* key code dispatched on click              */
+    int         separator; /* 1 = draw a gap before this button         */
+} ToolbarButton;
+
+static const ToolbarButton TOOLBAR_BUTTONS[] = {
+    /* ---- File operations ---- */
+    {"New",     CTRL_KEY('n'), 0},
+    {"Open",    CTRL_KEY('o'), 0},
+    {"Save",    CTRL_KEY('s'), 0},
+
+    /* ---- Undo / Redo ---- */
+    {"Undo",    CTRL_KEY('z'), 1},
+    {"Redo",    CTRL_KEY('y'), 0},
+
+    /* ---- Clipboard ---- */
+    {"Cut",     CTRL_KEY('x'), 1},
+    {"Copy",    CTRL_KEY('c'), 0},
+    {"Paste",   CTRL_KEY('v'), 0},
+
+    /* ---- Search ---- */
+    {"Find",    CTRL_KEY('f'), 1},
+    {"Replace", CTRL_KEY('r'), 0},
+
+    /* ---- Build ---- */
+    {"Build",   0,             1},   /* KEY_F(5) — set at render time */
+
+    /* sentinel */
+    {NULL, 0, 0}
+};
 
 /* ============================================================================
  * Color Mapping — ncurses color integers (0-7) → RGB values
@@ -262,7 +317,7 @@ static void gui_fill_rect(int x, int y, int w, int h, GuiRGB c)
 /*
  * gui_draw_text — render a text string at pixel position (x, y).
  *
- * Uses TTF_RenderText_Blended for anti-aliased text.  Creates a temporary
+ * Uses TTF_RenderUTF8_Blended for anti-aliased text.  Creates a temporary
  * SDL texture from the rendered surface, copies it to the renderer, then
  * frees both.  This is simple but creates/destroys textures per call.
  *
@@ -274,7 +329,7 @@ static int gui_draw_text(const char *text, int x, int y,
 {
     if (!text || text[0] == '\0') return 0;
 
-    SDL_Surface *surf = TTF_RenderText_Blended(font, text, color);
+    SDL_Surface *surf = TTF_RenderUTF8_Blended(font, text, color);
     if (!surf) return 0;
 
     SDL_Texture *tex = SDL_CreateTextureFromSurface(g_gui->renderer, surf);
@@ -293,12 +348,44 @@ static int gui_draw_text(const char *text, int x, int y,
 }
 
 /*
- * gui_draw_char — render a single character at pixel position (x, y).
+ * utf8_byte_len — return the byte length of a UTF-8 character from its
+ * leading byte.  See display.c for the full encoding table comment.
+ */
+static int utf8_byte_len(unsigned char c)
+{
+    if (c < 0x80) return 1;
+    if (c < 0xC0) return 1;       /* continuation byte — skip */
+    if (c < 0xE0) return 2;
+    if (c < 0xF0) return 3;
+    return 4;
+}
+
+/*
+ * gui_draw_char — render a single ASCII character at pixel position (x, y).
+ *
+ * For single-byte ASCII characters only.  Use gui_draw_char_utf8() for
+ * characters that may be multi-byte UTF-8.
  */
 static void gui_draw_char(char c, int x, int y,
                            SDL_Color color, TTF_Font *font)
 {
     char buf[2] = {c, '\0'};
+    gui_draw_text(buf, x, y, color, font);
+}
+
+/*
+ * gui_draw_char_utf8 — render a UTF-8 character (1–4 bytes) at pixel (x, y).
+ *
+ * Copies byte_len bytes from `text` into a null-terminated buffer and
+ * renders via gui_draw_text(), which now uses TTF_RenderUTF8_Blended.
+ */
+static void gui_draw_char_utf8(const char *text, int byte_len, int x, int y,
+                                SDL_Color color, TTF_Font *font)
+{
+    char buf[5];  /* max 4 UTF-8 bytes + null terminator */
+    if (byte_len > 4) byte_len = 4;
+    memcpy(buf, text, byte_len);
+    buf[byte_len] = '\0';
     gui_draw_text(buf, x, y, color, font);
 }
 
@@ -321,8 +408,8 @@ static void gui_update_term_size(void)
 {
     Editor *ed = g_gui->editor;
 
-    /* Calculate pixel dimensions of the text area */
-    int text_h = g_gui->win_height - GUI_TAB_HEIGHT - GUI_STATUS_HEIGHT;
+    /* Calculate pixel dimensions of the text area (below tab bar + toolbar) */
+    int text_h = g_gui->win_height - GUI_CONTENT_TOP - GUI_STATUS_HEIGHT;
     if (ed->show_build_panel)
         text_h -= BUILD_PANEL_HEIGHT * g_gui->char_height;
     if (text_h < g_gui->char_height)
@@ -396,6 +483,74 @@ static void gui_render_tab_bar(void)
                           g_gui->fg[CPAIR_TAB_INACTIVE]);
             x += 1;
         }
+    }
+}
+
+/* ============================================================================
+ * Rendering: Toolbar
+ *
+ * Draws a row of clickable buttons below the tab bar.  Each button is a
+ * rounded rectangle with a text label.  Buttons are grouped by function
+ * with small gaps between groups (controlled by the `separator` field).
+ *
+ * The toolbar occupies the pixel rows from GUI_TAB_HEIGHT to GUI_CONTENT_TOP.
+ * Click handling is in gui_handle_mouse() — it walks the same button layout
+ * to determine which button was hit.
+ * ============================================================================ */
+
+static void gui_render_toolbar(void)
+{
+    int cw = g_gui->char_width;
+    int ch = g_gui->char_height;
+    int y  = GUI_TAB_HEIGHT;     /* top of the toolbar strip */
+
+    /*
+     * Toolbar background — slightly lighter than the tab bar so the two
+     * strips are visually distinct.
+     */
+    GuiRGB tb_bg = {45, 45, 48};
+    gui_fill_rect(0, y, g_gui->win_width, GUI_TOOLBAR_HEIGHT, tb_bg);
+
+    /* Bottom border — thin line to separate toolbar from content */
+    GuiRGB border = {60, 60, 64};
+    gui_fill_rect(0, y + GUI_TOOLBAR_HEIGHT - 1, g_gui->win_width, 1, border);
+
+    /*
+     * Button styling constants.
+     *   pad  = horizontal padding inside each button (pixels)
+     *   gap  = extra horizontal space before a group separator
+     *   btn_h = button height in pixels (a bit shorter than the toolbar)
+     */
+    int pad   = 12;
+    int gap   = 10;
+    int btn_h = GUI_TOOLBAR_HEIGHT - 6;   /* 3px top/bottom margin */
+    int btn_y = y + 3;                     /* vertical centering in toolbar */
+
+    /* Button colors */
+    GuiRGB btn_bg   = {58, 58, 62};        /* button background */
+    GuiRGB btn_fg_c = {200, 200, 205};     /* button text color */
+    SDL_Color btn_fg = gui_sdl_color(btn_fg_c);
+
+    int bx = 4;  /* current x position — start with a small left margin */
+
+    for (int i = 0; TOOLBAR_BUTTONS[i].label; i++) {
+        const ToolbarButton *btn = &TOOLBAR_BUTTONS[i];
+
+        /* Group separator — extra gap before this button */
+        if (btn->separator)
+            bx += gap;
+
+        int text_w = (int)strlen(btn->label) * cw;
+        int btn_w  = text_w + pad * 2;
+
+        /* Button background rectangle */
+        gui_fill_rect(bx, btn_y, btn_w, btn_h, btn_bg);
+
+        /* Button label — centered vertically within the button */
+        int text_y = btn_y + (btn_h - ch) / 2;
+        gui_draw_text(btn->label, bx + pad, text_y, btn_fg, g_gui->font);
+
+        bx += btn_w + 2;  /* +2 for spacing between buttons */
     }
 }
 
@@ -580,12 +735,12 @@ static void gui_render_text_area(void)
         blame_px = BLAME_WIDTH * cw;
     text_x += blame_px;
 
-    int text_y = GUI_TAB_HEIGHT;
+    int text_y = GUI_CONTENT_TOP;
     int text_w = g_gui->win_width - text_x;
     if (ed->show_git_panel) text_w -= GIT_PANEL_WIDTH * cw;
     if (text_w < cw) text_w = cw;
 
-    int text_h = g_gui->win_height - GUI_TAB_HEIGHT - GUI_STATUS_HEIGHT;
+    int text_h = g_gui->win_height - GUI_CONTENT_TOP - GUI_STATUS_HEIGHT;
     if (ed->show_build_panel) text_h -= BUILD_PANEL_HEIGHT * ch;
     if (text_h < ch) text_h = ch;
 
@@ -700,13 +855,26 @@ static void gui_render_text_area(void)
             gui_fill_rect(text_x + text_w - 2, py, 2, ch, border);
         }
 
-        /* Render each character with the correct background and foreground */
+        /*
+         * Render each character with the correct background and foreground.
+         *
+         * We iterate by UTF-8 character (1–4 bytes each), not by raw byte.
+         * `col` is the byte offset into line_text (used for attribute lookup),
+         * `disp_col` is the visual column counter (used for pixel positioning).
+         * This way, a 3-byte UTF-8 character occupies one cell on screen.
+         */
         int start_col = ed->view_col;
         int end_col = start_col + visible_cols;
         if (end_col > line_len) end_col = line_len;
 
-        for (int col = start_col; col < end_col; col++) {
-            int px = text_x + (col - start_col) * cw;
+        int disp_col = 0;  /* visual column for pixel positioning */
+        int col = start_col;
+        while (col < end_col) {
+            /* How many bytes does this UTF-8 character span? */
+            int clen = utf8_byte_len((unsigned char)line_text[col]);
+            if (col + clen > line_len) clen = line_len - col;
+
+            int px = text_x + disp_col * cw;
 
             /* Determine background color */
             int has_bg = 0;
@@ -780,16 +948,19 @@ static void gui_render_text_area(void)
                 }
             }
 
-            /* Draw the character */
-            char c = line_text[col];
-            if (ed->show_whitespace && c == ' ') {
+            /* Draw the character (may be multi-byte UTF-8) */
+            if (ed->show_whitespace && clen == 1 && line_text[col] == ' ') {
                 /* Render whitespace dot (middle dot character) */
                 GuiRGB ws_color = {80, 80, 80};
                 gui_draw_char('.', px + cw / 4, py,
                               gui_sdl_color(ws_color), g_gui->font);
             } else {
-                gui_draw_char(c, px, py, gui_sdl_color(fg_color), f);
+                gui_draw_char_utf8(line_text + col, clen, px, py,
+                                   gui_sdl_color(fg_color), f);
             }
+
+            col += clen;
+            disp_col++;
         }
 
         /* LSP diagnostic underlines */
@@ -859,8 +1030,8 @@ static void gui_render_filetree(void)
     int cw = g_gui->char_width;
     int ch = g_gui->char_height;
     int panel_w = FILETREE_WIDTH * cw;
-    int panel_y = GUI_TAB_HEIGHT;
-    int panel_h = g_gui->win_height - GUI_TAB_HEIGHT - GUI_STATUS_HEIGHT;
+    int panel_y = GUI_CONTENT_TOP;
+    int panel_h = g_gui->win_height - GUI_CONTENT_TOP - GUI_STATUS_HEIGHT;
 
     /* Panel background */
     GuiRGB panel_bg = {37, 37, 38};
@@ -946,8 +1117,8 @@ static void gui_render_git_panel(void)
     int ch = g_gui->char_height;
     int panel_w = GIT_PANEL_WIDTH * cw;
     int panel_x = g_gui->win_width - panel_w;
-    int panel_y = GUI_TAB_HEIGHT;
-    int panel_h = g_gui->win_height - GUI_TAB_HEIGHT - GUI_STATUS_HEIGHT;
+    int panel_y = GUI_CONTENT_TOP;
+    int panel_h = g_gui->win_height - GUI_CONTENT_TOP - GUI_STATUS_HEIGHT;
 
     /* Background */
     GuiRGB panel_bg = {37, 37, 38};
@@ -1102,8 +1273,9 @@ static void gui_render(void)
     /* Recalculate term_rows/cols (panels may have changed) */
     gui_update_term_size();
 
-    /* Render each component */
+    /* Render each component (top to bottom) */
     gui_render_tab_bar();
+    gui_render_toolbar();
     gui_render_filetree();
     gui_render_text_area();
     gui_render_git_panel();
@@ -1574,9 +1746,48 @@ static void gui_handle_mouse(SDL_Event *event)
             return;
         }
 
+        /* ---- Click on toolbar ---- */
+        if (my >= GUI_TAB_HEIGHT && my < GUI_CONTENT_TOP) {
+            /*
+             * Walk the toolbar button layout to find which button was clicked.
+             * This mirrors the layout calculation in gui_render_toolbar().
+             */
+            int bx = 4;  /* starting x offset (matches render) */
+            int pad = 12; /* horizontal padding per button (matches render) */
+            int gap = 10; /* gap between groups (matches render) */
+
+            for (int i = 0; TOOLBAR_BUTTONS[i].label; i++) {
+                const ToolbarButton *btn = &TOOLBAR_BUTTONS[i];
+
+                if (btn->separator)
+                    bx += gap;
+
+                int text_w_px = (int)strlen(btn->label) * cw;
+                int btn_w = text_w_px + pad * 2;
+
+                if (mx >= bx && mx < bx + btn_w) {
+                    /*
+                     * Dispatch the button's key code through the normal
+                     * input pipeline so all editor logic is reused.
+                     *
+                     * Build uses KEY_F(5) which can't be a compile-time
+                     * constant in the struct, so we check for it here.
+                     */
+                    int key = btn->key;
+                    if (key == 0 && strcmp(btn->label, "Build") == 0)
+                        key = KEY_F(5);
+                    input_process_key_with(ed, key);
+                    return;
+                }
+
+                bx += btn_w + 2;  /* +2 for spacing between buttons */
+            }
+            return;
+        }
+
         /* ---- Click on file tree ---- */
         if (ed->show_filetree && mx < FILETREE_WIDTH * cw) {
-            int row = (my - GUI_TAB_HEIGHT) / ch - 1;  /* -1 for header */
+            int row = (my - GUI_CONTENT_TOP) / ch - 1;  /* -1 for header */
             if (row >= 0) {
                 int idx = ed->filetree_scroll + row;
                 if (idx < ed->filetree->count) {
@@ -1592,7 +1803,7 @@ static void gui_handle_mouse(SDL_Event *event)
         /* ---- Click on git panel ---- */
         if (ed->show_git_panel && ed->git_status
             && mx > g_gui->win_width - GIT_PANEL_WIDTH * cw) {
-            int row = (my - GUI_TAB_HEIGHT) / ch - 1;
+            int row = (my - GUI_CONTENT_TOP) / ch - 1;
             if (row >= 0) {
                 int idx = ed->git_panel_scroll + row;
                 if (idx < ed->git_status->count) {
@@ -1629,7 +1840,7 @@ static void gui_handle_mouse(SDL_Event *event)
             if (ed->show_git_blame && ed->git_blame.count > 0)
                 text_x += BLAME_WIDTH * cw;
 
-            int text_y = GUI_TAB_HEIGHT;
+            int text_y = GUI_CONTENT_TOP;
 
             if (mx >= text_x && my >= text_y) {
                 int row = (my - text_y) / ch;

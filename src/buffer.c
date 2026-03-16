@@ -96,14 +96,24 @@ static int buffer_ensure_lines(Buffer *buf, int needed)
 
 Buffer *buffer_create(void)
 {
-    Buffer *buf = malloc(sizeof(Buffer));
+    /*
+     * calloc zero-initialises the entire struct.  This is important because
+     * several fields are not explicitly set below but must be zero:
+     *
+     *   cursor_row, cursor_col, desired_col  — saved cursor position (0 = top-left)
+     *   view_row, view_col                    — saved viewport (0 = top-left)
+     *   lsp_diagnostics.count                 — number of LSP diagnostics (0 = none)
+     *
+     * Using malloc() + selective field-setting left these fields uninitialised.
+     * When a new buffer was later restored via restore_cursor_from_buffer(),
+     * the garbage values caused out-of-bounds reads and, on some heap layouts,
+     * a crash in free() from heap metadata corruption.
+     */
+    Buffer *buf = calloc(1, sizeof(Buffer));
     if (!buf) return NULL;
 
     buf->lines     = malloc(BUFFER_INITIAL_LINES * sizeof(Line));
-    buf->num_lines = 0;
     buf->capacity  = BUFFER_INITIAL_LINES;
-    buf->filename  = NULL;
-    buf->dirty     = 0;
     undo_clear(&buf->undo_stack);
     undo_clear(&buf->redo_stack);
 

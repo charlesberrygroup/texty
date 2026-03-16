@@ -469,16 +469,47 @@ static int col_in_any_match(const char *line_text, int line_len,
 }
 
 /*
- * draw_char_ws — output one character, substituting a visible marker for
- * spaces when show_whitespace is enabled.
+ * utf8_byte_len — return the byte length of a UTF-8 character from its
+ * leading byte.
  *
- * We use ncurses' ACS_BULLET (a portable middle-dot glyph) for spaces.
- * The caller is responsible for setting the correct attribute before calling
- * this function; we only change the character, not the color or style.
+ * UTF-8 encodes characters in 1–4 bytes.  The leading byte tells us how
+ * many bytes the character uses:
+ *   0xxxxxxx  →  1 byte  (ASCII, 0x00–0x7F)
+ *   110xxxxx  →  2 bytes (0xC0–0xDF)
+ *   1110xxxx  →  3 bytes (0xE0–0xEF)
+ *   11110xxx  →  4 bytes (0xF0–0xF7)
+ *   10xxxxxx  →  continuation byte (0x80–0xBF) — not a valid lead byte,
+ *                return 1 to skip past it safely.
  */
-static void draw_char_ws(char c, int show_whitespace)
+static int utf8_byte_len(unsigned char c)
 {
-    if (show_whitespace && c == ' ') {
+    if (c < 0x80) return 1;       /* ASCII */
+    if (c < 0xC0) return 1;       /* continuation byte — treat as 1 to skip */
+    if (c < 0xE0) return 2;       /* 2-byte sequence */
+    if (c < 0xF0) return 3;       /* 3-byte sequence */
+    return 4;                      /* 4-byte sequence */
+}
+
+/*
+ * draw_char_ws — output one character (possibly multi-byte UTF-8),
+ * substituting a visible marker for spaces when show_whitespace is enabled.
+ *
+ * Parameters:
+ *   text           — pointer to the first byte of the character
+ *   byte_len       — number of bytes in this character (1 for ASCII, 2–4 for
+ *                    multi-byte UTF-8)
+ *   show_whitespace — if true, spaces are rendered as ACS_BULLET (·)
+ *
+ * We use addnstr() instead of addch() so that ncurses receives the full
+ * multi-byte UTF-8 sequence at once.  addch() only handles single bytes
+ * and breaks multi-byte characters into individual garbage glyphs.
+ *
+ * The caller must call setlocale(LC_ALL, "") before initscr() for ncurses
+ * to interpret multi-byte sequences correctly.
+ */
+static void draw_char_ws(const char *text, int byte_len, int show_whitespace)
+{
+    if (show_whitespace && byte_len == 1 && text[0] == ' ') {
         /*
          * ACS_BULLET is a portable ncurses character for a small filled
          * circle/dot.  It renders correctly on all terminal types that
@@ -487,24 +518,35 @@ static void draw_char_ws(char c, int show_whitespace)
         addch(ACS_BULLET);
     } else {
         /*
-         * Cast to unsigned char: characters > 127 would be sign-extended
-         * to a negative int without the cast, which ncurses may misinterpret.
+         * addnstr() outputs exactly byte_len bytes from text.  When the
+         * locale is UTF-8, ncurses correctly interprets multi-byte sequences
+         * and advances the cursor by the character's display width (1 for
+         * most characters, 2 for CJK fullwidth characters).
          */
-        addch((unsigned char)c);
+        addnstr(text, byte_len);
     }
 }
 
 /*
- * draw_text_segment — output `len` characters from `text`, substituting
- * spaces with the whitespace marker when show_whitespace is enabled.
+ * draw_text_segment — output a segment of text, substituting spaces with
+ * the whitespace marker when show_whitespace is enabled.
  *
- * This replaces addnstr() calls in the non-search rendering path so that
- * whitespace substitution works in all rendering modes uniformly.
+ * Iterates through the text by UTF-8 characters (not individual bytes),
+ * so multi-byte characters are rendered correctly as a unit.
  */
 static void draw_text_segment(const char *text, int len, int show_whitespace)
 {
-    for (int i = 0; i < len; i++)
-        draw_char_ws(text[i], show_whitespace);
+    int i = 0;
+    while (i < len) {
+        /*
+         * Determine how many bytes this UTF-8 character spans.
+         * Clamp to remaining length to avoid reading past the segment.
+         */
+        int clen = utf8_byte_len((unsigned char)text[i]);
+        if (i + clen > len) clen = len - i;
+        draw_char_ws(text + i, clen, show_whitespace);
+        i += clen;
+    }
 }
 
 /*
@@ -561,8 +603,19 @@ static void draw_line_with_search(int buf_row,
     int         match_row  = ed->search_match_row;
     int         match_col  = ed->search_match_col;
 
-    for (int i = 0; i < draw_len; i++) {
+    /*
+     * Iterate by UTF-8 character, not by byte.  Each iteration determines the
+     * attribute (color/style) from the byte offset into the buffer (buf_col),
+     * then outputs the full multi-byte sequence at once via draw_char_ws().
+     * Continuation bytes of multi-byte characters are skipped automatically.
+     */
+    int i = 0;
+    while (i < draw_len) {
         int buf_col = view_col + i;
+
+        /* How many bytes does this UTF-8 character span? */
+        int clen = utf8_byte_len((unsigned char)draw_start[i]);
+        if (i + clen > draw_len) clen = draw_len - i;
 
         int attr;
 
@@ -614,7 +667,8 @@ static void draw_line_with_search(int buf_row,
         }
 
         attrset(attr);
-        draw_char_ws(draw_start[i], ed->show_whitespace);
+        draw_char_ws(draw_start + i, clen, ed->show_whitespace);
+        i += clen;
     }
 }
 
@@ -930,12 +984,7 @@ static void draw_phantom_line(const char *old_line, int text_cols,
     if (old_line) {
         int len = (int)strlen(old_line);
         if (len > text_cols) len = text_cols;
-        for (int i = 0; i < len; i++) {
-            if (show_ws && old_line[i] == ' ')
-                addch(ACS_BULLET);   /* visible dot for spaces */
-            else
-                addch(old_line[i]);
-        }
+        draw_text_segment(old_line, len, show_ws);
     }
     clrtoeol();
     attroff(COLOR_PAIR(CPAIR_GIT_OLD_LINE));
