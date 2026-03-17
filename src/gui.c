@@ -1635,6 +1635,28 @@ static int sdl_to_ncurses_key(SDL_Keysym ks)
     int ctrl  = (ks.mod & KMOD_CTRL)  != 0;
 
     /* ---- Arrow keys ---- */
+    int alt   = (ks.mod & KMOD_ALT)   != 0;
+
+    /*
+     * Word movement: Option+Arrow on macOS, Ctrl+Arrow on Linux/Windows.
+     *
+     * SDL2 uses KMOD_GUI for the Cmd key on macOS, so KMOD_ALT correctly
+     * maps to the Option key.  We accept EITHER Alt or Ctrl so the same
+     * binary works on both platforms.  Shift variants select while moving.
+     *
+     * The key codes match what ncurses assigns via terminfo:
+     *   kLFT5 (Ctrl+Left)  = 547     kRIT5 (Ctrl+Right) = 562
+     *   kLFT3 (Alt+Left)   = 545     kRIT3 (Alt+Right)  = 560
+     *   kLFT6 (Shift+Ctrl+Left) = 548  kRIT6 (Shift+Ctrl+Right) = 563
+     *
+     * We map all modifier variants to the same word-movement codes so
+     * input.c handles them uniformly.
+     */
+    if ((alt || ctrl) && key == SDLK_LEFT  && shift) return 548; /* select word left  */
+    if ((alt || ctrl) && key == SDLK_RIGHT && shift) return 563; /* select word right */
+    if ((alt || ctrl) && key == SDLK_LEFT)           return 547; /* word left  */
+    if ((alt || ctrl) && key == SDLK_RIGHT)          return 562; /* word right */
+
     if (key == SDLK_UP    && shift) return KEY_SR;
     if (key == SDLK_DOWN  && shift) return KEY_SF;
     if (key == SDLK_LEFT  && shift) return KEY_SLEFT;

@@ -428,6 +428,25 @@ void editor_move_left(Editor *ed);
 /** Move the cursor one column right. Wraps to start of next line at end of line. */
 void editor_move_right(Editor *ed);
 
+/**
+ * editor_move_word_left — jump the cursor one word to the left.
+ *
+ * A "word" boundary is a transition between word characters (letters, digits,
+ * underscore) and non-word characters.  Skips whitespace/punctuation first,
+ * then moves to the start of the previous word.  Wraps to the previous line
+ * if at column 0.
+ */
+void editor_move_word_left(Editor *ed);
+
+/**
+ * editor_move_word_right — jump the cursor one word to the right.
+ *
+ * Skips the current word (letters/digits/underscore), then any whitespace or
+ * punctuation, landing at the start of the next word.  Wraps to the next
+ * line if at end of line.
+ */
+void editor_move_word_right(Editor *ed);
+
 /** Move the cursor to column 0 of the current line. */
 void editor_move_line_start(Editor *ed);
 
@@ -588,6 +607,8 @@ void editor_select_up(Editor *ed);
 void editor_select_down(Editor *ed);
 void editor_select_line_start(Editor *ed);
 void editor_select_line_end(Editor *ed);
+void editor_select_word_left(Editor *ed);
+void editor_select_word_right(Editor *ed);
 
 /**
  * editor_select_all — select the entire buffer contents (Ctrl+A).

@@ -913,6 +913,223 @@ TEST(test_select_down_at_bottom_does_nothing)
 }
 
 /* ============================================================================
+ * Word movement
+ * ============================================================================ */
+
+/*
+ * Helper: type a string into the editor one character at a time.
+ * This positions the cursor at the end of the typed text.
+ */
+static void type_string(Editor *ed, const char *s)
+{
+    for (int i = 0; s[i]; i++)
+        editor_insert_char(ed, s[i]);
+}
+
+TEST(test_word_right_basic)
+{
+    /*
+     * "hello world" — cursor at 0.  Word-right should jump past "hello"
+     * and the space, landing at the 'w' of "world" (column 6).
+     */
+    Editor ed; make_editor(&ed);
+    type_string(&ed, "hello world");
+    ed.cursor_col = 0; ed.desired_col = 0;
+
+    editor_move_word_right(&ed);
+
+    ASSERT(ed.cursor_col == 6, "cursor at start of 'world'");
+    editor_cleanup(&ed);
+}
+
+TEST(test_word_right_from_mid_word)
+{
+    /*
+     * "hello world" — cursor at col 2 (inside "hello").
+     * Word-right should skip rest of "hello" + space → col 6.
+     */
+    Editor ed; make_editor(&ed);
+    type_string(&ed, "hello world");
+    ed.cursor_col = 2; ed.desired_col = 2;
+
+    editor_move_word_right(&ed);
+
+    ASSERT(ed.cursor_col == 6, "skips rest of word + whitespace");
+    editor_cleanup(&ed);
+}
+
+TEST(test_word_right_at_end_of_line)
+{
+    /*
+     * Two lines: "abc" and "def".  Cursor at end of line 0 (col 3).
+     * Word-right should wrap to start of line 1.
+     */
+    Editor ed; make_editor(&ed);
+    type_string(&ed, "abc");
+    editor_insert_newline(&ed);
+    type_string(&ed, "def");
+    ed.cursor_row = 0; ed.cursor_col = 3; ed.desired_col = 3;
+
+    editor_move_word_right(&ed);
+
+    ASSERT(ed.cursor_row == 1, "moved to line 1");
+    ASSERT(ed.cursor_col == 0, "at start of line 1");
+    editor_cleanup(&ed);
+}
+
+TEST(test_word_right_multiple_spaces)
+{
+    /*
+     * "foo   bar" — cursor at 0.  Should jump past "foo" and all spaces
+     * to land at 'b' (col 6).
+     */
+    Editor ed; make_editor(&ed);
+    type_string(&ed, "foo   bar");
+    ed.cursor_col = 0; ed.desired_col = 0;
+
+    editor_move_word_right(&ed);
+
+    ASSERT(ed.cursor_col == 6, "skips multiple spaces");
+    editor_cleanup(&ed);
+}
+
+TEST(test_word_right_punctuation)
+{
+    /*
+     * "foo->bar" — cursor at 0.  Should stop at start of "->" (col 3)
+     * because '-' is non-word.  Second word-right skips "->" to 'b' (col 5).
+     */
+    Editor ed; make_editor(&ed);
+    type_string(&ed, "foo->bar");
+    ed.cursor_col = 0; ed.desired_col = 0;
+
+    editor_move_word_right(&ed);
+    ASSERT(ed.cursor_col == 5, "jumps past word + punctuation to next word");
+    editor_cleanup(&ed);
+}
+
+TEST(test_word_left_basic)
+{
+    /*
+     * "hello world" — cursor at col 11 (end).  Word-left should jump
+     * to the start of "world" (col 6).
+     */
+    Editor ed; make_editor(&ed);
+    type_string(&ed, "hello world");
+    /* cursor is at col 11 after typing */
+
+    editor_move_word_left(&ed);
+
+    ASSERT(ed.cursor_col == 6, "cursor at start of 'world'");
+    editor_cleanup(&ed);
+}
+
+TEST(test_word_left_from_mid_word)
+{
+    /*
+     * "hello world" — cursor at col 8 (inside "world").
+     * Word-left should jump to start of "world" (col 6).
+     */
+    Editor ed; make_editor(&ed);
+    type_string(&ed, "hello world");
+    ed.cursor_col = 8; ed.desired_col = 8;
+
+    editor_move_word_left(&ed);
+
+    ASSERT(ed.cursor_col == 6, "jumps to start of current word");
+    editor_cleanup(&ed);
+}
+
+TEST(test_word_left_at_start_of_line)
+{
+    /*
+     * Two lines: "abc" and "def".  Cursor at start of line 1 (col 0).
+     * Word-left should wrap to end of line 0 (col 3) and stop there,
+     * matching VS Code/Sublime behavior.
+     */
+    Editor ed; make_editor(&ed);
+    type_string(&ed, "abc");
+    editor_insert_newline(&ed);
+    type_string(&ed, "def");
+    ed.cursor_row = 1; ed.cursor_col = 0; ed.desired_col = 0;
+
+    editor_move_word_left(&ed);
+
+    ASSERT(ed.cursor_row == 0, "moved to line 0");
+    ASSERT(ed.cursor_col == 3, "at end of line 0");
+    editor_cleanup(&ed);
+}
+
+TEST(test_word_left_at_buffer_start)
+{
+    /*
+     * Cursor at (0, 0).  Word-left should be a no-op.
+     */
+    Editor ed; make_editor(&ed);
+    type_string(&ed, "hello");
+    ed.cursor_row = 0; ed.cursor_col = 0; ed.desired_col = 0;
+
+    editor_move_word_left(&ed);
+
+    ASSERT(ed.cursor_row == 0, "still row 0");
+    ASSERT(ed.cursor_col == 0, "still col 0");
+    editor_cleanup(&ed);
+}
+
+TEST(test_word_right_at_buffer_end)
+{
+    /*
+     * Single line "hello", cursor at col 5 (end).  Word-right is a no-op
+     * (no next line).
+     */
+    Editor ed; make_editor(&ed);
+    type_string(&ed, "hello");
+    /* cursor at col 5 */
+
+    editor_move_word_right(&ed);
+
+    ASSERT(ed.cursor_row == 0, "still row 0");
+    ASSERT(ed.cursor_col == 5, "still at end");
+    editor_cleanup(&ed);
+}
+
+TEST(test_select_word_right)
+{
+    /*
+     * "hello world" — select word-right from col 0 should activate selection
+     * with anchor at 0 and cursor at 6.
+     */
+    Editor ed; make_editor(&ed);
+    type_string(&ed, "hello world");
+    ed.cursor_col = 0; ed.desired_col = 0;
+
+    editor_select_word_right(&ed);
+
+    ASSERT(ed.sel_active == 1,     "selection active");
+    ASSERT(ed.sel_anchor_col == 0, "anchor at col 0");
+    ASSERT(ed.cursor_col == 6,     "cursor at col 6");
+    editor_cleanup(&ed);
+}
+
+TEST(test_select_word_left)
+{
+    /*
+     * "hello world" — select word-left from col 11 should activate selection
+     * with anchor at 11 and cursor at 6.
+     */
+    Editor ed; make_editor(&ed);
+    type_string(&ed, "hello world");
+    /* cursor at col 11 */
+
+    editor_select_word_left(&ed);
+
+    ASSERT(ed.sel_active == 1,      "selection active");
+    ASSERT(ed.sel_anchor_col == 11, "anchor at col 11");
+    ASSERT(ed.cursor_col == 6,      "cursor at col 6");
+    editor_cleanup(&ed);
+}
+
+/* ============================================================================
  * Recent files
  * ============================================================================ */
 
@@ -1084,6 +1301,20 @@ int main(void)
     RUN(test_select_down_extends_existing_selection);
     RUN(test_select_up_at_top_does_nothing);
     RUN(test_select_down_at_bottom_does_nothing);
+
+    /* Word movement */
+    RUN(test_word_right_basic);
+    RUN(test_word_right_from_mid_word);
+    RUN(test_word_right_at_end_of_line);
+    RUN(test_word_right_multiple_spaces);
+    RUN(test_word_right_punctuation);
+    RUN(test_word_left_basic);
+    RUN(test_word_left_from_mid_word);
+    RUN(test_word_left_at_start_of_line);
+    RUN(test_word_left_at_buffer_start);
+    RUN(test_word_right_at_buffer_end);
+    RUN(test_select_word_right);
+    RUN(test_select_word_left);
 
     /* Recent files */
     RUN(test_recent_add_basic);

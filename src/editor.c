@@ -634,6 +634,117 @@ void editor_move_right(Editor *ed)
     editor_scroll(ed);
 }
 
+/*
+ * is_word_char — helper to classify characters as "word" or "non-word".
+ *
+ * Word characters are letters, digits, and underscore — the same definition
+ * most editors use (e.g. VS Code, Sublime).  Everything else (whitespace,
+ * punctuation, operators) is non-word.
+ */
+static int is_word_char(char c)
+{
+    return (c >= 'a' && c <= 'z')
+        || (c >= 'A' && c <= 'Z')
+        || (c >= '0' && c <= '9')
+        || c == '_';
+}
+
+void editor_move_word_left(Editor *ed)
+{
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf) return;
+
+    int row = ed->cursor_row;
+    int col = ed->cursor_col;
+
+    /*
+     * If we are at the start of a line, wrap to the end of the previous
+     * line and stop — matching VS Code / Sublime behavior where
+     * word-left at BOL goes to the end of the previous line.
+     */
+    if (col == 0) {
+        if (row > 0) {
+            row--;
+            col = buffer_line_len(buf, row);
+            ed->cursor_row  = row;
+            ed->cursor_col  = col;
+            ed->desired_col = col;
+            editor_scroll(ed);
+        }
+        return;
+    }
+
+    const char *line = buffer_get_line(buf, row);
+    int ll = buffer_line_len(buf, row);
+
+    /*
+     * Phase 1: skip non-word characters (whitespace, punctuation) to the left.
+     * This handles the gap between the cursor and the previous word.
+     */
+    while (col > 0 && !is_word_char(line[col - 1]))
+        col--;
+
+    /*
+     * Phase 2: skip word characters to the left to find the start of the word.
+     */
+    while (col > 0 && is_word_char(line[col - 1]))
+        col--;
+
+    /* Clamp just in case */
+    if (col < 0) col = 0;
+    if (col > ll) col = ll;
+
+    ed->cursor_row  = row;
+    ed->cursor_col  = col;
+    ed->desired_col = col;
+    editor_scroll(ed);
+}
+
+void editor_move_word_right(Editor *ed)
+{
+    Buffer *buf = editor_current_buffer(ed);
+    if (!buf) return;
+
+    int row = ed->cursor_row;
+    int col = ed->cursor_col;
+    int ll  = buffer_line_len(buf, row);
+
+    /*
+     * If we are at the end of a line, wrap to start of the next line
+     * and stop — this matches the behavior of most editors (VS Code,
+     * Sublime) where word-right at EOL goes to the beginning of the
+     * next line.
+     */
+    if (col >= ll) {
+        if (row < buf->num_lines - 1) {
+            ed->cursor_row  = row + 1;
+            ed->cursor_col  = 0;
+            ed->desired_col = 0;
+            editor_scroll(ed);
+        }
+        return;
+    }
+
+    const char *line = buffer_get_line(buf, row);
+
+    /*
+     * Phase 1: skip the current word characters (if we're in a word).
+     */
+    while (col < ll && is_word_char(line[col]))
+        col++;
+
+    /*
+     * Phase 2: skip non-word characters to reach the start of the next word.
+     */
+    while (col < ll && !is_word_char(line[col]))
+        col++;
+
+    ed->cursor_row  = row;
+    ed->cursor_col  = col;
+    ed->desired_col = col;
+    editor_scroll(ed);
+}
+
 void editor_move_line_start(Editor *ed)
 {
     ed->cursor_col  = 0;
@@ -1623,6 +1734,18 @@ void editor_select_line_end(Editor *ed)
 {
     selection_ensure_anchor(ed);
     editor_move_line_end(ed);
+}
+
+void editor_select_word_left(Editor *ed)
+{
+    selection_ensure_anchor(ed);
+    editor_move_word_left(ed);
+}
+
+void editor_select_word_right(Editor *ed)
+{
+    selection_ensure_anchor(ed);
+    editor_move_word_right(ed);
 }
 
 void editor_select_all(Editor *ed)

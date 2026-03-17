@@ -679,6 +679,38 @@ void input_process_key_with(struct Editor *ed, int key)
             editor_move_file_end(ed);
             break;
 
+        /*
+         * Word movement — jump one word left/right.
+         *
+         * ncurses terminfo key codes (from xterm-256color):
+         *   kLFT3 (Alt+Left)   = 545    kRIT3 (Alt+Right)  = 560
+         *   kLFT5 (Ctrl+Left)  = 547    kRIT5 (Ctrl+Right) = 562
+         *   kLFT6 (Shift+Ctrl+Left) = 548  kRIT6 (Shift+Ctrl+Right) = 563
+         *
+         * macOS uses Alt (Option) + Arrow for word movement.
+         * Linux uses Ctrl + Arrow for word movement.
+         * We handle both so texty works on either platform.
+         */
+        case 545:          /* Alt+Left   — word left  (macOS TUI) */
+        case 547:          /* Ctrl+Left  — word left  (Linux TUI / GUI) */
+            editor_selection_clear(ed);
+            editor_move_word_left(ed);
+            break;
+
+        case 560:          /* Alt+Right  — word right (macOS TUI) */
+        case 562:          /* Ctrl+Right — word right (Linux TUI / GUI) */
+            editor_selection_clear(ed);
+            editor_move_word_right(ed);
+            break;
+
+        case 548:          /* Shift+Ctrl+Left  — select word left  */
+            editor_select_word_left(ed);
+            break;
+
+        case 563:          /* Shift+Ctrl+Right — select word right */
+            editor_select_word_right(ed);
+            break;
+
         /* ------------------------------------------------------------------ *
          * Text editing
          * ------------------------------------------------------------------ */
