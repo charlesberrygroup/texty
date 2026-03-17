@@ -467,41 +467,88 @@ static void gui_render_tab_bar(void)
 {
     Editor *ed = g_gui->editor;
     int cw = g_gui->char_width;
+    int ch = g_gui->char_height;
     int w = g_gui->win_width;
 
     /* Background */
     gui_fill_rect(0, 0, w, GUI_TAB_HEIGHT, g_gui->bg[CPAIR_TAB_INACTIVE]);
+
+    /* Get mouse position for close-button hover effect */
+    int mouse_x, mouse_y;
+    SDL_GetMouseState(&mouse_x, &mouse_y);
 
     int x = 0;
     for (int i = 0; i < ed->num_buffers; i++) {
         Buffer *buf = ed->buffers[i];
         int active = (i == ed->current_buffer);
 
-        /* Build tab label */
+        /* Build tab label: " filename [+] " */
         const char *name = buf->filename ? strrchr(buf->filename, '/') : NULL;
         name = name ? name + 1 : (buf->filename ? buf->filename : "[No Name]");
         const char *dirt = buf->dirty ? " [+]" : "";
 
         char label[64];
-        snprintf(label, sizeof(label), " %.20s%s ", name, dirt);
+        snprintf(label, sizeof(label), " %.20s%s", name, dirt);
         int label_w = (int)strlen(label) * cw;
 
-        if (x + label_w > w) break;
+        /*
+         * Close button: a small "×" rendered after the label text.
+         * The close button occupies close_w pixels at the right edge
+         * of the tab.  We add a small gap before and after the "×".
+         */
+        int close_pad = cw / 2;              /* padding around the × */
+        int close_w   = cw + close_pad * 2;  /* total close button width */
+        int tab_w     = label_w + close_w;
+
+        if (x + tab_w > w) break;
 
         /* Tab background */
         GuiRGB tab_bg = active ? g_gui->bg[CPAIR_TAB_ACTIVE]
                                : g_gui->bg[CPAIR_TAB_INACTIVE];
         GuiRGB tab_fg = active ? g_gui->fg[CPAIR_TAB_ACTIVE]
                                : g_gui->fg[CPAIR_TAB_INACTIVE];
-        gui_fill_rect(x, 0, label_w, GUI_TAB_HEIGHT, tab_bg);
+        gui_fill_rect(x, 0, tab_w, GUI_TAB_HEIGHT, tab_bg);
 
         /* Tab text — center vertically */
-        int ty = (GUI_TAB_HEIGHT - g_gui->char_height) / 2;
+        int ty = (GUI_TAB_HEIGHT - ch) / 2;
         TTF_Font *f = (active && g_gui->bold[CPAIR_TAB_ACTIVE])
                     ? g_gui->font_bold : g_gui->font;
         gui_draw_text(label, x, ty, gui_sdl_color(tab_fg), f);
 
-        x += label_w;
+        /*
+         * Close button "×" — rendered at the right edge of the tab.
+         * Highlights on hover to indicate it's clickable.
+         */
+        int close_x = x + label_w + close_pad;
+        int close_hit_x = x + label_w;  /* hit area starts here */
+        int close_hovered = (mouse_y >= 0 && mouse_y < GUI_TAB_HEIGHT
+                             && mouse_x >= close_hit_x
+                             && mouse_x < close_hit_x + close_w);
+
+        if (close_hovered) {
+            /* Hover highlight — subtle circle/rect behind the × */
+            GuiRGB hover_bg = {80, 80, 88};
+            int hx = close_hit_x + 2;
+            int hy = ty;
+            int hw = close_w - 4;
+            int hh = ch;
+            gui_fill_rect(hx, hy, hw, hh, hover_bg);
+        }
+
+        /*
+         * × character color:
+         *   hovered  → bright white (clearly clickable)
+         *   active   → visible gray (easy to find on the selected tab)
+         *   inactive → dim gray (unobtrusive on background tabs)
+         */
+        GuiRGB close_fg_c = close_hovered ? (GuiRGB){220, 220, 225}
+                          : active        ? (GuiRGB){180, 180, 190}
+                                          : (GuiRGB){100, 100, 108};
+        SDL_Color close_fg = gui_sdl_color(close_fg_c);
+        gui_draw_text("\xc3\x97", close_x, ty, close_fg, g_gui->font);
+                                    /* × = U+00D7, UTF-8: 0xC3 0x97 */
+
+        x += tab_w;
 
         /* Separator */
         if (i < ed->num_buffers - 1 && x < w) {
@@ -1945,33 +1992,66 @@ static void gui_handle_mouse(SDL_Event *event)
                     : (buf->filename ? buf->filename : "[No Name]");
                 const char *dirt = buf->dirty ? " [+]" : "";
                 char label[64];
-                snprintf(label, sizeof(label), " %.20s%s ", name, dirt);
+                snprintf(label, sizeof(label), " %.20s%s", name, dirt);
                 int lw = (int)strlen(label) * cw;
 
-                if (mx >= x && mx < x + lw) {
-                    /* Switch to this buffer */
-                    if (i != ed->current_buffer) {
-                        /* Save current cursor position */
-                        Buffer *cur = editor_current_buffer(ed);
-                        if (cur) {
-                            cur->cursor_row  = ed->cursor_row;
-                            cur->cursor_col  = ed->cursor_col;
-                            cur->desired_col = ed->desired_col;
-                            cur->view_row    = ed->view_row;
-                            cur->view_col    = ed->view_col;
+                /*
+                 * Close button region — matches the layout in
+                 * gui_render_tab_bar().  The × occupies close_w pixels
+                 * at the right edge of the tab.
+                 */
+                int close_pad = cw / 2;
+                int close_w   = cw + close_pad * 2;
+                int tab_w     = lw + close_w;
+
+                if (mx >= x && mx < x + tab_w) {
+                    int close_hit_x = x + lw;
+
+                    if (mx >= close_hit_x) {
+                        /*
+                         * Click on close button — switch to this buffer
+                         * (if not already current) and close it.
+                         *
+                         * editor_close_buffer() operates on the current
+                         * buffer and handles dirty-file confirmation
+                         * (first click warns, second click confirms).
+                         */
+                        if (i != ed->current_buffer) {
+                            Buffer *cur = editor_current_buffer(ed);
+                            if (cur) {
+                                cur->cursor_row  = ed->cursor_row;
+                                cur->cursor_col  = ed->cursor_col;
+                                cur->desired_col = ed->desired_col;
+                                cur->view_row    = ed->view_row;
+                                cur->view_col    = ed->view_col;
+                            }
+                            ed->current_buffer = i;
                         }
-                        ed->current_buffer = i;
-                        Buffer *nb = ed->buffers[i];
-                        ed->cursor_row  = nb->cursor_row;
-                        ed->cursor_col  = nb->cursor_col;
-                        ed->desired_col = nb->desired_col;
-                        ed->view_row    = nb->view_row;
-                        ed->view_col    = nb->view_col;
-                        editor_scroll(ed);
+                        editor_close_buffer(ed);
+                    } else {
+                        /* Click on tab label — switch to this buffer */
+                        if (i != ed->current_buffer) {
+                            Buffer *cur = editor_current_buffer(ed);
+                            if (cur) {
+                                cur->cursor_row  = ed->cursor_row;
+                                cur->cursor_col  = ed->cursor_col;
+                                cur->desired_col = ed->desired_col;
+                                cur->view_row    = ed->view_row;
+                                cur->view_col    = ed->view_col;
+                            }
+                            ed->current_buffer = i;
+                            Buffer *nb = ed->buffers[i];
+                            ed->cursor_row  = nb->cursor_row;
+                            ed->cursor_col  = nb->cursor_col;
+                            ed->desired_col = nb->desired_col;
+                            ed->view_row    = nb->view_row;
+                            ed->view_col    = nb->view_col;
+                            editor_scroll(ed);
+                        }
                     }
                     return;
                 }
-                x += lw + 1;  /* +1 for separator */
+                x += tab_w + 1;  /* +1 for separator */
             }
             return;
         }
