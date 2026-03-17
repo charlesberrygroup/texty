@@ -73,7 +73,7 @@
 #define GUI_DEFAULT_HEIGHT  800    /* Initial window height in pixels          */
 #define GUI_FONT_SIZE       15     /* Font size in points                     */
 #define GUI_TAB_HEIGHT      28     /* Tab bar height in pixels                */
-#define GUI_TOOLBAR_HEIGHT  26     /* Toolbar height in pixels                */
+#define GUI_TOOLBAR_HEIGHT  30     /* Toolbar height in pixels                */
 #define GUI_STATUS_HEIGHT   26     /* Status bar height in pixels             */
 #define GUI_CURSOR_WIDTH    2      /* Cursor bar width in pixels              */
 
@@ -89,9 +89,11 @@
 /* ============================================================================
  * Toolbar Button Definitions
  *
- * Each button has a label, the key code it dispatches when clicked, and a
- * separator flag.  When `separator` is 1, a small gap is drawn BEFORE this
- * button to visually group related actions.
+ * Each button has a Unicode icon (single character rendered in the button)
+ * and a text label shown as a tooltip on hover.  Icons use characters from
+ * the Mathematical Operators (U+2200-U+22FF), Arrows (U+2190-U+21FF), and
+ * Geometric Shapes (U+25A0-U+25FF) blocks — all fully covered by Menlo
+ * (macOS) and DejaVu Sans Mono (Linux).
  *
  * Key codes use the same CTRL(x) encoding as input.c — the ASCII control
  * character for the given letter.  Function keys use ncurses KEY_F().
@@ -100,35 +102,37 @@
 #define CTRL_KEY(x)  ((x) & 0x1F)
 
 typedef struct {
-    const char *label;     /* button text (short — 2–7 chars)           */
-    int         key;       /* key code dispatched on click              */
-    int         separator; /* 1 = draw a gap before this button         */
+    const char *icon;      /* UTF-8 icon character for display           */
+    const char *label;     /* text label for tooltip / identification    */
+    const char *shortcut;  /* keyboard shortcut hint for tooltip         */
+    int         key;       /* key code dispatched on click               */
+    int         separator; /* 1 = draw a gap before this button          */
 } ToolbarButton;
 
 static const ToolbarButton TOOLBAR_BUTTONS[] = {
     /* ---- File operations ---- */
-    {"New",     CTRL_KEY('n'), 0},
-    {"Open",    CTRL_KEY('o'), 0},
-    {"Save",    CTRL_KEY('s'), 0},
+    {"\xe2\x8a\x95", "New",     "Ctrl+N", CTRL_KEY('n'), 0},  /* ⊕ U+2295 */
+    {"\xe2\x97\x87", "Open",    "Ctrl+O", CTRL_KEY('o'), 0},  /* ◇ U+25C7 */
+    {"\xe2\x86\x93", "Save",    "Ctrl+S", CTRL_KEY('s'), 0},  /* ↓ U+2193 */
 
     /* ---- Undo / Redo ---- */
-    {"Undo",    CTRL_KEY('z'), 1},
-    {"Redo",    CTRL_KEY('y'), 0},
+    {"\xe2\x86\xb6", "Undo",    "Ctrl+Z", CTRL_KEY('z'), 1},  /* ↶ U+21B6 */
+    {"\xe2\x86\xb7", "Redo",    "Ctrl+Y", CTRL_KEY('y'), 0},  /* ↷ U+21B7 */
 
     /* ---- Clipboard ---- */
-    {"Cut",     CTRL_KEY('x'), 1},
-    {"Copy",    CTRL_KEY('c'), 0},
-    {"Paste",   CTRL_KEY('v'), 0},
+    {"\xe2\x8a\x97", "Cut",     "Ctrl+X", CTRL_KEY('x'), 1},  /* ⊗ U+2297 */
+    {"\xe2\x8a\x9e", "Copy",    "Ctrl+C", CTRL_KEY('c'), 0},  /* ⊞ U+229E */
+    {"\xe2\x96\xa3", "Paste",   "Ctrl+V", CTRL_KEY('v'), 0},  /* ▣ U+25A3 */
 
     /* ---- Search ---- */
-    {"Find",    CTRL_KEY('f'), 1},
-    {"Replace", CTRL_KEY('r'), 0},
+    {"\xe2\x97\x8e", "Find",    "Ctrl+F", CTRL_KEY('f'), 1},  /* ◎ U+25CE */
+    {"\xe2\x87\x84", "Replace", "Ctrl+R", CTRL_KEY('r'), 0},  /* ⇄ U+21C4 */
 
     /* ---- Build ---- */
-    {"Build",   0,             1},   /* KEY_F(5) — set at render time */
+    {"\xe2\x96\xb6", "Build",   "F5",     0,             1},  /* ▶ U+25B6 */
 
     /* sentinel */
-    {NULL, 0, 0}
+    {NULL, NULL, NULL, 0, 0}
 };
 
 /* ============================================================================
@@ -198,6 +202,17 @@ typedef struct {
      * to the current mouse position.
      */
     int           drag_active;
+
+    /*
+     * Toolbar hover state — set during gui_render_toolbar() so the
+     * tooltip can be drawn later on top of all other content.
+     *   toolbar_hover_idx = index into TOOLBAR_BUTTONS[], or -1 if none
+     *   toolbar_hover_x   = left edge of the hovered button (pixels)
+     *   toolbar_hover_w   = width of the hovered button (pixels)
+     */
+    int           toolbar_hover_idx;
+    int           toolbar_hover_x;
+    int           toolbar_hover_w;
 } GuiState;
 
 /*
@@ -509,9 +524,22 @@ static void gui_render_tab_bar(void)
  * to determine which button was hit.
  * ============================================================================ */
 
+/*
+ * gui_toolbar_btn_width — compute the pixel width of a toolbar button.
+ *
+ * Uses TTF_SizeUTF8 to correctly measure Unicode icon characters, which
+ * may not be exactly char_width pixels wide (some are double-width, or
+ * the font may render them at a different advance).
+ */
+static int gui_toolbar_btn_width(const ToolbarButton *btn, int pad)
+{
+    int icon_w = 0;
+    TTF_SizeUTF8(g_gui->font, btn->icon, &icon_w, NULL);
+    return icon_w + pad * 2;
+}
+
 static void gui_render_toolbar(void)
 {
-    int cw = g_gui->char_width;
     int ch = g_gui->char_height;
     int y  = GUI_TAB_HEIGHT;     /* top of the toolbar strip */
 
@@ -519,11 +547,11 @@ static void gui_render_toolbar(void)
      * Toolbar background — slightly lighter than the tab bar so the two
      * strips are visually distinct.
      */
-    GuiRGB tb_bg = {45, 45, 48};
+    GuiRGB tb_bg = {40, 40, 44};
     gui_fill_rect(0, y, g_gui->win_width, GUI_TOOLBAR_HEIGHT, tb_bg);
 
     /* Bottom border — thin line to separate toolbar from content */
-    GuiRGB border = {60, 60, 64};
+    GuiRGB border = {55, 55, 60};
     gui_fill_rect(0, y + GUI_TOOLBAR_HEIGHT - 1, g_gui->win_width, 1, border);
 
     /*
@@ -532,37 +560,115 @@ static void gui_render_toolbar(void)
      *   gap  = extra horizontal space before a group separator
      *   btn_h = button height in pixels (a bit shorter than the toolbar)
      */
-    int pad   = 12;
-    int gap   = 10;
-    int btn_h = GUI_TOOLBAR_HEIGHT - 6;   /* 3px top/bottom margin */
-    int btn_y = y + 3;                     /* vertical centering in toolbar */
+    int pad   = 10;
+    int gap   = 12;
+    int btn_h = GUI_TOOLBAR_HEIGHT - 8;   /* 4px top/bottom margin */
+    int btn_y = y + 4;                     /* vertical centering in toolbar */
+
+    /* Get mouse position for hover detection */
+    int mouse_x, mouse_y;
+    SDL_GetMouseState(&mouse_x, &mouse_y);
 
     /* Button colors */
-    GuiRGB btn_bg   = {58, 58, 62};        /* button background */
-    GuiRGB btn_fg_c = {200, 200, 205};     /* button text color */
-    SDL_Color btn_fg = gui_sdl_color(btn_fg_c);
+    GuiRGB btn_bg_normal = {52, 52, 56};   /* default button background    */
+    GuiRGB btn_bg_hover  = {72, 72, 78};   /* highlighted on mouse hover   */
+    GuiRGB icon_fg_c     = {190, 195, 210};/* icon color — slightly blue   */
+    GuiRGB icon_hover_c  = {230, 235, 245};/* icon color on hover — bright */
+    SDL_Color icon_fg    = gui_sdl_color(icon_fg_c);
 
-    int bx = 4;  /* current x position — start with a small left margin */
+    int bx = 6;  /* current x position — start with a small left margin */
 
-    for (int i = 0; TOOLBAR_BUTTONS[i].label; i++) {
+    /* Reset hover state — will be set if mouse is over a button */
+    g_gui->toolbar_hover_idx = -1;
+
+    for (int i = 0; TOOLBAR_BUTTONS[i].icon; i++) {
         const ToolbarButton *btn = &TOOLBAR_BUTTONS[i];
 
-        /* Group separator — extra gap before this button */
-        if (btn->separator)
-            bx += gap;
+        /* Group separator — extra gap with a thin divider line */
+        if (btn->separator) {
+            bx += gap / 2;
+            GuiRGB div = {60, 60, 65};
+            gui_fill_rect(bx, btn_y + 2, 1, btn_h - 4, div);
+            bx += gap / 2;
+        }
 
-        int text_w = (int)strlen(btn->label) * cw;
-        int btn_w  = text_w + pad * 2;
+        int btn_w = gui_toolbar_btn_width(btn, pad);
 
-        /* Button background rectangle */
-        gui_fill_rect(bx, btn_y, btn_w, btn_h, btn_bg);
+        /* Check if mouse is hovering over this button */
+        int hovered = (mouse_x >= bx && mouse_x < bx + btn_w
+                       && mouse_y >= btn_y && mouse_y < btn_y + btn_h);
 
-        /* Button label — centered vertically within the button */
-        int text_y = btn_y + (btn_h - ch) / 2;
-        gui_draw_text(btn->label, bx + pad, text_y, btn_fg, g_gui->font);
+        if (hovered) {
+            g_gui->toolbar_hover_idx = i;
+            g_gui->toolbar_hover_x   = bx;
+            g_gui->toolbar_hover_w   = btn_w;
+        }
+
+        /* Button background — lighter when hovered */
+        GuiRGB bg = hovered ? btn_bg_hover : btn_bg_normal;
+        gui_fill_rect(bx, btn_y, btn_w, btn_h, bg);
+
+        /* Subtle 1px border for depth */
+        GuiRGB btn_border = hovered ? (GuiRGB){90, 90, 96}
+                                    : (GuiRGB){62, 62, 68};
+        /* Top edge */
+        gui_fill_rect(bx, btn_y, btn_w, 1, btn_border);
+        /* Bottom edge */
+        gui_fill_rect(bx, btn_y + btn_h - 1, btn_w, 1,
+                       hovered ? btn_border : (GuiRGB){42, 42, 46});
+
+        /* Icon — centered in the button */
+        int icon_w = 0;
+        TTF_SizeUTF8(g_gui->font, btn->icon, &icon_w, NULL);
+        int icon_x = bx + (btn_w - icon_w) / 2;
+        int icon_y = btn_y + (btn_h - ch) / 2;
+        SDL_Color fc = hovered ? gui_sdl_color(icon_hover_c) : icon_fg;
+        gui_draw_text(btn->icon, icon_x, icon_y, fc, g_gui->font);
 
         bx += btn_w + 2;  /* +2 for spacing between buttons */
     }
+
+}
+
+/*
+ * gui_render_toolbar_tooltip — draw a tooltip for the hovered toolbar button.
+ *
+ * Called AFTER all other rendering so the tooltip floats on top of the
+ * text area and panels.  Only draws if a button is currently hovered.
+ */
+static void gui_render_toolbar_tooltip(void)
+{
+    if (g_gui->toolbar_hover_idx < 0) return;
+
+    const ToolbarButton *btn = &TOOLBAR_BUTTONS[g_gui->toolbar_hover_idx];
+
+    /* Build tooltip text: "Label  Shortcut" */
+    char tip[64];
+    snprintf(tip, sizeof(tip), " %s  %s ", btn->label, btn->shortcut);
+
+    int tip_w = 0, tip_h = 0;
+    TTF_SizeUTF8(g_gui->font, tip, &tip_w, &tip_h);
+
+    /* Position: centered below the button, clamped to window edges */
+    int tip_x = g_gui->toolbar_hover_x
+              + (g_gui->toolbar_hover_w - tip_w) / 2;
+    int tip_y = GUI_TAB_HEIGHT + GUI_TOOLBAR_HEIGHT + 2;
+    if (tip_x < 0) tip_x = 0;
+    if (tip_x + tip_w > g_gui->win_width)
+        tip_x = g_gui->win_width - tip_w;
+
+    int tip_pad = 3;  /* vertical padding */
+
+    /* Tooltip background with border */
+    GuiRGB tip_bg     = {50, 50, 55};
+    GuiRGB tip_border = {80, 80, 88};
+    gui_fill_rect(tip_x - 1, tip_y - 1,
+                   tip_w + 2, tip_h + tip_pad * 2 + 2, tip_border);
+    gui_fill_rect(tip_x, tip_y, tip_w, tip_h + tip_pad * 2, tip_bg);
+
+    /* Tooltip text */
+    SDL_Color tip_fc = {210, 210, 215, 255};
+    gui_draw_text(tip, tip_x, tip_y + tip_pad, tip_fc, g_gui->font);
 }
 
 /* ============================================================================
@@ -1292,6 +1398,9 @@ static void gui_render(void)
     gui_render_git_panel();
     gui_render_build_panel();
     gui_render_status_bar();
+
+    /* Tooltip drawn last so it floats on top of all content */
+    gui_render_toolbar_tooltip();
 }
 
 /* ============================================================================
@@ -1873,18 +1982,17 @@ static void gui_handle_mouse(SDL_Event *event)
              * Walk the toolbar button layout to find which button was clicked.
              * This mirrors the layout calculation in gui_render_toolbar().
              */
-            int bx = 4;  /* starting x offset (matches render) */
-            int pad = 12; /* horizontal padding per button (matches render) */
-            int gap = 10; /* gap between groups (matches render) */
+            int bx = 6;   /* starting x offset (matches render) */
+            int pad = 10;  /* horizontal padding per button      */
+            int gap = 12;  /* gap between groups                 */
 
-            for (int i = 0; TOOLBAR_BUTTONS[i].label; i++) {
+            for (int i = 0; TOOLBAR_BUTTONS[i].icon; i++) {
                 const ToolbarButton *btn = &TOOLBAR_BUTTONS[i];
 
                 if (btn->separator)
-                    bx += gap;
+                    bx += gap;  /* includes divider */
 
-                int text_w_px = (int)strlen(btn->label) * cw;
-                int btn_w = text_w_px + pad * 2;
+                int btn_w = gui_toolbar_btn_width(btn, pad);
 
                 if (mx >= bx && mx < bx + btn_w) {
                     /*
@@ -1914,8 +2022,27 @@ static void gui_handle_mouse(SDL_Event *event)
                 if (idx < ed->filetree->count) {
                     ed->filetree_cursor = idx;
                     ed->filetree_focus = 1;
-                    /* Double-click could open — for now single click selects,
-                     * user presses Enter to open (handled by input.c) */
+
+                    /*
+                     * Double-click: open the file or toggle directory.
+                     *
+                     * SDL2 tracks click count in event->button.clicks
+                     * (2 = double-click).  This mirrors the Enter key
+                     * behavior from input_process_filetree_key().
+                     */
+                    if (event->button.clicks >= 2) {
+                        FlatEntry *e = &ed->filetree->entries[idx];
+                        if (e->is_dir) {
+                            filetree_toggle(ed->filetree, idx);
+                            /* Clamp cursor if collapse shrunk the list */
+                            if (ed->filetree->count > 0
+                                && ed->filetree_cursor >= ed->filetree->count)
+                                ed->filetree_cursor = ed->filetree->count - 1;
+                        } else {
+                            editor_open_or_switch(ed, e->path);
+                            ed->filetree_focus = 0;
+                        }
+                    }
                 }
             }
             return;
