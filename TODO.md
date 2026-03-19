@@ -85,11 +85,12 @@ A cross-platform terminal IDE written in C, built in phases.
 - [ ] Run shell commands without leaving the editor
 - [ ] Toggle terminal panel height
 
-### Split Panes
-- [ ] Split editor horizontally / vertically
-- [ ] Move focus between panes
-- [ ] Close pane
-- [ ] Use ncurses windows (newwin) — previous stdscr approach failed
+### Split Panes (GUI only) ✅
+- [x] Split editor horizontally / vertically (Ctrl+Shift+D / Ctrl+Shift+R)
+- [x] Move focus between panes (Ctrl+Shift+] / Ctrl+Shift+[ or click)
+- [x] Close pane (Ctrl+Shift+W)
+- [x] Mouse scroll targets pane under cursor
+- [ ] TUI split panes (use ncurses windows — previous stdscr approach failed)
 
 ---
 

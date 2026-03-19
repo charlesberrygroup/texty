@@ -51,6 +51,7 @@
 #include "display.h"   /* for CPAIR_*, GUTTER_WIDTH, panel dimensions */
 #include "input.h"     /* for input_process_key_with */
 #include "lsp.h"
+#include "gui_pane.h"  /* split pane tree for multi-pane layout */
 
 #include <signal.h>
 #include <stdio.h>
@@ -76,6 +77,7 @@
 #define GUI_TOOLBAR_HEIGHT  30     /* Toolbar height in pixels                */
 #define GUI_STATUS_HEIGHT   26     /* Status bar height in pixels             */
 #define GUI_CURSOR_WIDTH    2      /* Cursor bar width in pixels              */
+#define GUI_PANE_DIVIDER_PX 2      /* Pixel width of pane divider bar         */
 
 /*
  * GUI_CONTENT_TOP — the y-coordinate where editor content begins.
@@ -213,6 +215,18 @@ typedef struct {
     int           toolbar_hover_idx;
     int           toolbar_hover_x;
     int           toolbar_hover_w;
+
+    /*
+     * Split pane tree — manages multiple editor views within the window.
+     *
+     * pane_root:   root of the binary pane tree.  Always non-NULL after init.
+     *              When there's only one pane, the root is a single leaf.
+     *
+     * active_pane: the currently focused leaf pane.  All keyboard input goes
+     *              to this pane.  Highlighted with a colored border.
+     */
+    GuiPaneNode  *pane_root;
+    GuiPaneNode  *active_pane;
 } GuiState;
 
 /*
@@ -223,6 +237,141 @@ typedef struct {
  * GUI instance, a global is the simplest solution.
  */
 static GuiState *g_gui = NULL;
+
+/* ============================================================================
+ * Split Pane Helpers
+ *
+ * These functions swap per-pane state (cursor, viewport, buffer index,
+ * selection) between the active pane and the Editor struct.  This lets all
+ * existing editor logic work without modification — it always reads from
+ * and writes to the Editor, and we load/save the pane state around each
+ * input processing step.
+ * ============================================================================ */
+
+/*
+ * gui_pane_load_to_editor — load a pane's state into the Editor.
+ *
+ * Call this BEFORE processing keyboard input so the editor operates on
+ * the correct pane's cursor position and buffer.
+ */
+static void gui_pane_load_to_editor(GuiPaneNode *pane)
+{
+    if (!pane || !pane->is_leaf) return;
+    Editor *ed = g_gui->editor;
+
+    /*
+     * If the buffer is changing, save the current buffer's cursor state
+     * first (so it's preserved when we switch back later).
+     */
+    if (ed->current_buffer != pane->buffer_idx) {
+        Buffer *cur = editor_current_buffer(ed);
+        if (cur) {
+            cur->cursor_row  = ed->cursor_row;
+            cur->cursor_col  = ed->cursor_col;
+            cur->desired_col = ed->desired_col;
+            cur->view_row    = ed->view_row;
+            cur->view_col    = ed->view_col;
+        }
+        ed->current_buffer = pane->buffer_idx;
+    }
+
+    ed->cursor_row      = pane->cursor_row;
+    ed->cursor_col      = pane->cursor_col;
+    ed->desired_col     = pane->desired_col;
+    ed->view_row        = pane->view_row;
+    ed->view_col        = pane->view_col;
+    ed->sel_active      = pane->sel_active;
+    ed->sel_anchor_row  = pane->sel_anchor_row;
+    ed->sel_anchor_col  = pane->sel_anchor_col;
+}
+
+/*
+ * gui_pane_save_from_editor — save the Editor's state back into a pane.
+ *
+ * Call this AFTER processing keyboard input so the pane captures any
+ * changes the editor made (cursor movement, buffer switch, etc.).
+ */
+static void gui_pane_save_from_editor(GuiPaneNode *pane)
+{
+    if (!pane || !pane->is_leaf) return;
+    Editor *ed = g_gui->editor;
+
+    pane->buffer_idx    = ed->current_buffer;
+    pane->cursor_row    = ed->cursor_row;
+    pane->cursor_col    = ed->cursor_col;
+    pane->desired_col   = ed->desired_col;
+    pane->view_row      = ed->view_row;
+    pane->view_col      = ed->view_col;
+    pane->sel_active    = ed->sel_active;
+    pane->sel_anchor_row = ed->sel_anchor_row;
+    pane->sel_anchor_col = ed->sel_anchor_col;
+}
+
+/*
+ * gui_set_pane_term_size — set term_rows/cols for a pane's dimensions.
+ *
+ * The editor uses term_rows/cols for scrolling and page-up/down calculations.
+ * Each pane has its own effective size, so we set these before processing
+ * input for the active pane.
+ *
+ * COMPENSATION TRICK: editor_rows() and editor_cols() subtract panel widths
+ * from term_rows/cols (filetree, git panel, build panel).  But with panes,
+ * panels are rendered OUTSIDE the pane area — the pane rectangle already
+ * excludes them.  So we add the panel widths back to compensate, ensuring
+ * editor_rows/cols return the correct pane dimensions.
+ */
+static void gui_set_pane_term_size(GuiPaneNode *pane)
+{
+    if (!pane || !pane->is_leaf) return;
+    Editor *ed = g_gui->editor;
+    int ch = g_gui->char_height;
+    int cw = g_gui->char_width;
+
+    /* Rows: pane height in characters, plus virtual tab bar and status bar */
+    int pane_rows = pane->ph / ch;
+    if (pane_rows < 1) pane_rows = 1;
+    ed->term_rows = pane_rows + 1 + TAB_BAR_HEIGHT;
+    /* Compensate for build panel subtraction in editor_rows() */
+    if (ed->show_build_panel && ed->build_result)
+        ed->term_rows += BUILD_PANEL_HEIGHT;
+
+    /* Cols: pane width in characters, compensating for panel subtractions */
+    int pane_cols = pane->pw / cw;
+    if (pane_cols < 1) pane_cols = 1;
+    int panel_w     = (ed->show_filetree && ed->filetree) ? FILETREE_WIDTH : 0;
+    int git_panel_w = (ed->show_git_panel && ed->git_status) ? GIT_PANEL_WIDTH : 0;
+    ed->term_cols = pane_cols + panel_w + git_panel_w;
+}
+
+/*
+ * gui_panes_validate_buffers — ensure all pane buffer indices are in range.
+ *
+ * Call this after closing a buffer, since the buffer array may have shifted.
+ * Panes pointing to invalid buffer indices are reset to buffer 0.
+ */
+static void gui_panes_validate_buffers_node(GuiPaneNode *node, int num_buffers)
+{
+    if (!node) return;
+    if (node->is_leaf) {
+        if (node->buffer_idx >= num_buffers) {
+            node->buffer_idx = num_buffers - 1;
+            if (node->buffer_idx < 0) node->buffer_idx = 0;
+            /* Reset cursor since we're now showing a different buffer */
+            node->cursor_row = node->cursor_col = node->desired_col = 0;
+            node->view_row = node->view_col = 0;
+            node->sel_active = 0;
+        }
+    } else {
+        gui_panes_validate_buffers_node(node->first, num_buffers);
+        gui_panes_validate_buffers_node(node->second, num_buffers);
+    }
+}
+
+static void gui_panes_validate_buffers(void)
+{
+    Editor *ed = g_gui->editor;
+    gui_panes_validate_buffers_node(g_gui->pane_root, ed->num_buffers);
+}
 
 /* ============================================================================
  * Color Utilities
@@ -432,9 +581,18 @@ static void gui_draw_char_utf8(const char *text, int byte_len, int x, int y,
 
 static void gui_update_term_size(void)
 {
-    Editor *ed = g_gui->editor;
+    /*
+     * With split panes, set term_rows/cols based on the active pane's
+     * dimensions.  If panes haven't been laid out yet (first frame),
+     * fall back to the whole window calculation.
+     */
+    if (g_gui->active_pane && g_gui->active_pane->pw > 0) {
+        gui_set_pane_term_size(g_gui->active_pane);
+        return;
+    }
 
-    /* Calculate pixel dimensions of the text area (below tab bar + toolbar) */
+    /* Fallback: use entire window (pre-pane-layout or single pane) */
+    Editor *ed = g_gui->editor;
     int text_h = g_gui->win_height - GUI_CONTENT_TOP - GUI_STATUS_HEIGHT;
     if (ed->show_build_panel)
         text_h -= BUILD_PANEL_HEIGHT * g_gui->char_height;
@@ -449,10 +607,9 @@ static void gui_update_term_size(void)
     if (text_w < g_gui->char_width)
         text_w = g_gui->char_width;
 
-    /* Convert to character dimensions and set on the editor */
     int text_rows = text_h / g_gui->char_height;
     if (text_rows < 1) text_rows = 1;
-    ed->term_rows = text_rows + 2;  /* +1 tab bar, +1 status bar */
+    ed->term_rows = text_rows + 2;
 
     int text_cols = text_w / g_gui->char_width;
     if (text_cols < 1) text_cols = 1;
@@ -878,7 +1035,16 @@ static int gui_in_search_match(const char *line_text, int line_len,
     return 0;
 }
 
-static void gui_render_text_area(void)
+/*
+ * gui_render_pane_content — render one pane's text area (gutter + text + cursor).
+ *
+ * The pane's editor state (cursor, viewport, buffer) must already be loaded
+ * into the Editor struct before calling this.  The pane's pixel rectangle
+ * (px, py, pw, ph) determines where content is drawn.
+ *
+ * is_active: if 1, draw a highlighted border around this pane.
+ */
+static void gui_render_pane_content(GuiPaneNode *pane, int is_active)
 {
     Editor *ed = g_gui->editor;
     Buffer *buf = editor_current_buffer(ed);
@@ -887,25 +1053,31 @@ static void gui_render_text_area(void)
     int cw = g_gui->char_width;
     int ch = g_gui->char_height;
 
-    /* Calculate text area bounds in pixels */
-    int text_x = 0;
-    if (ed->show_filetree) text_x += FILETREE_WIDTH * cw;
-    int gutter_px = GUTTER_WIDTH * cw;
-    text_x += gutter_px;
+    /*
+     * Set up SDL clip rectangle so nothing renders outside this pane.
+     * This prevents text from one pane bleeding into an adjacent pane.
+     */
+    SDL_Rect clip = {pane->px, pane->py, pane->pw, pane->ph};
+    SDL_RenderSetClipRect(g_gui->renderer, &clip);
 
-    /* Add blame column if active */
+    /*
+     * Calculate text area bounds from the pane's pixel rectangle.
+     * The gutter (line numbers) occupies the left side of the pane.
+     * Blame annotations (if active) follow the gutter.
+     * The remaining space is for the actual text content.
+     */
+    int gutter_px = GUTTER_WIDTH * cw;
+
     int blame_px = 0;
     if (ed->show_git_blame && ed->git_blame.count > 0)
         blame_px = BLAME_WIDTH * cw;
-    text_x += blame_px;
 
-    int text_y = GUI_CONTENT_TOP;
-    int text_w = g_gui->win_width - text_x;
-    if (ed->show_git_panel) text_w -= GIT_PANEL_WIDTH * cw;
+    int text_x = pane->px + gutter_px + blame_px;
+    int text_y = pane->py;
+    int text_w = pane->pw - gutter_px - blame_px;
     if (text_w < cw) text_w = cw;
 
-    int text_h = g_gui->win_height - GUI_CONTENT_TOP - GUI_STATUS_HEIGHT;
-    if (ed->show_build_panel) text_h -= BUILD_PANEL_HEIGHT * ch;
+    int text_h = pane->ph;
     if (text_h < ch) text_h = ch;
 
     int visible_rows = text_h / ch;
@@ -934,13 +1106,12 @@ static void gui_render_text_area(void)
     int bm_row = -1, bm_col = -1;
     editor_find_bracket_match(ed, &bm_row, &bm_col);
 
-    /* Render the gutter */
-    int gutter_x = ed->show_filetree ? FILETREE_WIDTH * cw : 0;
-    gui_render_gutter(gutter_x, text_y, visible_rows, gutter_px);
+    /* Render the gutter at the left edge of this pane */
+    gui_render_gutter(pane->px, text_y, visible_rows, gutter_px);
 
     /* Render blame annotations if active */
     if (blame_px > 0) {
-        int blame_x = gutter_x + gutter_px;
+        int blame_x = pane->px + gutter_px;
         for (int r = 0; r < visible_rows; r++) {
             int line = ed->view_row + r;
             if (line >= buf->num_lines || line >= ed->git_blame.count) break;
@@ -1179,6 +1350,86 @@ static void gui_render_text_area(void)
             gui_fill_rect(cx, cy, GUI_CURSOR_WIDTH, ch, cursor_color);
         }
     }
+
+    /*
+     * Active pane border — draw a colored highlight so the user knows
+     * which pane has keyboard focus.  Only shown when multiple panes exist.
+     */
+    if (is_active && gui_pane_count(g_gui->pane_root) > 1) {
+        GuiRGB border = {68, 113, 196};  /* blue — matches theme accent */
+        int bw = 2;  /* border width in pixels */
+        /* Top */
+        gui_fill_rect(pane->px, pane->py, pane->pw, bw, border);
+        /* Bottom */
+        gui_fill_rect(pane->px, pane->py + pane->ph - bw, pane->pw, bw, border);
+        /* Left */
+        gui_fill_rect(pane->px, pane->py, bw, pane->ph, border);
+        /* Right */
+        gui_fill_rect(pane->px + pane->pw - bw, pane->py, bw, pane->ph, border);
+    }
+
+    /* Clear the clip rectangle so subsequent rendering is unrestricted */
+    SDL_RenderSetClipRect(g_gui->renderer, NULL);
+}
+
+/* ============================================================================
+ * Rendering: Pane Tree (recursive)
+ *
+ * Walks the pane tree and renders each leaf pane's content, then draws
+ * divider bars between split panes.
+ * ============================================================================ */
+
+/*
+ * gui_render_panes — recursively render all leaf panes.
+ *
+ * For each leaf, loads the pane's state into the Editor, renders the
+ * text content, then continues to the next pane.
+ */
+static void gui_render_panes(GuiPaneNode *node)
+{
+    if (!node) return;
+
+    if (node->is_leaf) {
+        int is_active = (node == g_gui->active_pane);
+        gui_pane_load_to_editor(node);
+        gui_render_pane_content(node, is_active);
+        return;
+    }
+
+    gui_render_panes(node->first);
+    gui_render_panes(node->second);
+}
+
+/*
+ * gui_render_pane_dividers — draw divider bars between split panes.
+ *
+ * For each internal (split) node, draws a thin bar between the two
+ * children.  The bar position is in the gap between child rectangles.
+ */
+static void gui_render_pane_dividers(GuiPaneNode *node)
+{
+    if (!node || node->is_leaf) return;
+
+    GuiRGB divider_color = {55, 55, 60};
+
+    if (node->vertical) {
+        /* Vertical split: draw a vertical bar between left and right */
+        int dx = node->first->px + node->first->pw;
+        int dy = node->py;
+        int dw = GUI_PANE_DIVIDER_PX;
+        int dh = node->ph;
+        gui_fill_rect(dx, dy, dw, dh, divider_color);
+    } else {
+        /* Horizontal split: draw a horizontal bar between top and bottom */
+        int dx = node->px;
+        int dy = node->first->py + node->first->ph;
+        int dw = node->pw;
+        int dh = GUI_PANE_DIVIDER_PX;
+        gui_fill_rect(dx, dy, dw, dh, divider_color);
+    }
+
+    gui_render_pane_dividers(node->first);
+    gui_render_pane_dividers(node->second);
 }
 
 /* ============================================================================
@@ -1429,19 +1680,55 @@ static void gui_render_build_panel(void)
 
 static void gui_render(void)
 {
+    Editor *ed = g_gui->editor;
+    int cw = g_gui->char_width;
+    int ch = g_gui->char_height;
+
     /* Clear the entire window with the theme background color */
     SDL_SetRenderDrawColor(g_gui->renderer,
         g_gui->theme_bg.r, g_gui->theme_bg.g, g_gui->theme_bg.b, 255);
     SDL_RenderClear(g_gui->renderer);
 
-    /* Recalculate term_rows/cols (panels may have changed) */
+    /*
+     * Compute the pane area — the region available for editor panes,
+     * after subtracting the tab bar, toolbar, status bar, and side/bottom
+     * panels (file tree, git, build).
+     */
+    int pane_x = 0;
+    if (ed->show_filetree && ed->filetree)
+        pane_x = FILETREE_WIDTH * cw;
+
+    int pane_y = GUI_CONTENT_TOP;
+
+    int pane_w = g_gui->win_width - pane_x;
+    if (ed->show_git_panel && ed->git_status)
+        pane_w -= GIT_PANEL_WIDTH * cw;
+    if (pane_w < cw) pane_w = cw;
+
+    int pane_h = g_gui->win_height - GUI_CONTENT_TOP - GUI_STATUS_HEIGHT;
+    if (ed->show_build_panel && ed->build_result)
+        pane_h -= BUILD_PANEL_HEIGHT * ch;
+    if (pane_h < ch) pane_h = ch;
+
+    /* Layout the pane tree within the available area */
+    gui_pane_layout(g_gui->pane_root, pane_x, pane_y, pane_w, pane_h,
+                    GUI_PANE_DIVIDER_PX);
+
+    /* Update term_rows/cols for the active pane */
     gui_update_term_size();
 
-    /* Render each component (top to bottom) */
+    /* Render each component */
     gui_render_tab_bar();
     gui_render_toolbar();
     gui_render_filetree();
-    gui_render_text_area();
+
+    /* Render all panes (loads each pane's state into ed temporarily) */
+    gui_render_panes(g_gui->pane_root);
+    gui_render_pane_dividers(g_gui->pane_root);
+
+    /* Load active pane state for status bar (shows active pane's cursor) */
+    gui_pane_load_to_editor(g_gui->active_pane);
+
     gui_render_git_panel();
     gui_render_build_panel();
     gui_render_status_bar();
@@ -1887,22 +2174,39 @@ static int sdl_to_ncurses_key(SDL_Keysym ks)
  * This helper is used by both the click handler and the drag handler so
  * the coordinate math lives in one place.
  */
+/*
+ * gui_pixel_to_buffer_pos — convert pixel coordinates to buffer row/col.
+ *
+ * Uses the active pane's rectangle to determine the text area bounds.
+ * Also accepts a pane pointer so the caller can determine which pane
+ * was clicked (set to active_pane if the click is inside the text area).
+ *
+ * Returns 1 if the pixel is inside a pane's text area, 0 otherwise.
+ */
 static int gui_pixel_to_buffer_pos(int px, int py, int *out_row, int *out_col)
 {
     Editor *ed = g_gui->editor;
     int cw = g_gui->char_width;
     int ch = g_gui->char_height;
 
-    /* Calculate text area origin (left edge and top edge in pixels) */
-    int text_x = 0;
-    if (ed->show_filetree) text_x += FILETREE_WIDTH * cw;
-    text_x += GUTTER_WIDTH * cw;
+    /*
+     * Find which pane contains this pixel position.
+     * If found, use that pane's rectangle for coordinate calculation.
+     * If not found, the click is outside all panes (in a panel or gap).
+     */
+    GuiPaneNode *pane = gui_pane_find_at(g_gui->pane_root, px, py);
+    if (!pane) return 0;
+
+    /* Calculate text area origin within the pane (after gutter + blame) */
+    int gutter_px = GUTTER_WIDTH * cw;
+    int blame_px = 0;
     if (ed->show_git_blame && ed->git_blame.count > 0)
-        text_x += BLAME_WIDTH * cw;
+        blame_px = BLAME_WIDTH * cw;
 
-    int text_y = GUI_CONTENT_TOP;
+    int text_x = pane->px + gutter_px + blame_px;
+    int text_y = pane->py;
 
-    /* Must be inside the text area */
+    /* Must be inside the text portion (past the gutter) */
     if (px < text_x || py < text_y)
         return 0;
 
@@ -1937,7 +2241,19 @@ static void gui_handle_mouse(SDL_Event *event)
     int ch = g_gui->char_height;
 
     if (event->type == SDL_MOUSEWHEEL) {
-        /* Scroll the text area */
+        /*
+         * Scroll the pane under the mouse cursor.
+         * Find which pane the mouse is over and scroll that one.
+         */
+        int mouse_x, mouse_y;
+        SDL_GetMouseState(&mouse_x, &mouse_y);
+        GuiPaneNode *scroll_pane = gui_pane_find_at(
+            g_gui->pane_root, mouse_x, mouse_y);
+        if (!scroll_pane) scroll_pane = g_gui->active_pane;
+
+        /* Temporarily load this pane's state for scrolling */
+        gui_pane_load_to_editor(scroll_pane);
+
         int scroll_amount = -event->wheel.y * 3;  /* 3 lines per notch */
         ed->view_row += scroll_amount;
         Buffer *buf = editor_current_buffer(ed);
@@ -1946,6 +2262,13 @@ static void gui_handle_mouse(SDL_Event *event)
             int max_view = buf->num_lines - 1;
             if (ed->view_row > max_view) ed->view_row = max_view;
         }
+
+        gui_pane_save_from_editor(scroll_pane);
+
+        /* If we scrolled a non-active pane, reload active pane state */
+        if (scroll_pane != g_gui->active_pane)
+            gui_pane_load_to_editor(g_gui->active_pane);
+
         return;
     }
 
@@ -1958,19 +2281,19 @@ static void gui_handle_mouse(SDL_Event *event)
 
     /* ---- Mouse motion while dragging — extend selection ---- */
     if (event->type == SDL_MOUSEMOTION && g_gui->drag_active) {
+        /* Ensure active pane state is loaded for cursor updates */
+        gui_pane_load_to_editor(g_gui->active_pane);
+        gui_set_pane_term_size(g_gui->active_pane);
+
         int buf_row, buf_col;
         if (gui_pixel_to_buffer_pos(event->motion.x, event->motion.y,
                                     &buf_row, &buf_col)) {
-            /*
-             * Move the cursor to the new position.  The selection anchor
-             * was set on MOUSEBUTTONDOWN and stays fixed — the selection
-             * spans from anchor to cursor.
-             */
             ed->cursor_row  = buf_row;
             ed->cursor_col  = buf_col;
             ed->desired_col = buf_col;
-            ed->sel_active  = 1;   /* ensure selection stays on */
+            ed->sel_active  = 1;
             editor_scroll(ed);
+            gui_pane_save_from_editor(g_gui->active_pane);
         }
         return;
     }
@@ -2159,8 +2482,22 @@ static void gui_handle_mouse(SDL_Event *event)
             }
         }
 
-        /* ---- Click in text area — position cursor and start drag ---- */
+        /* ---- Click in text area — position cursor, start drag, focus pane ---- */
         {
+            /*
+             * Before checking the click position, determine which pane
+             * was clicked and switch focus to it.
+             */
+            GuiPaneNode *clicked_pane = gui_pane_find_at(
+                g_gui->pane_root, mx, my);
+            if (clicked_pane && clicked_pane != g_gui->active_pane) {
+                /* Save current pane state, switch focus, load new pane */
+                gui_pane_save_from_editor(g_gui->active_pane);
+                g_gui->active_pane = clicked_pane;
+                gui_pane_load_to_editor(clicked_pane);
+                gui_set_pane_term_size(clicked_pane);
+            }
+
             int buf_row, buf_col;
             if (gui_pixel_to_buffer_pos(mx, my, &buf_row, &buf_col)) {
 
@@ -2172,12 +2509,6 @@ static void gui_handle_mouse(SDL_Event *event)
                 int shift = (SDL_GetModState() & KMOD_SHIFT) != 0;
 
                 if (shift) {
-                    /*
-                     * Shift+click: if no selection is active yet, set the
-                     * anchor at the current cursor position (the user is
-                     * saying "from here to there").  Then move cursor to
-                     * the clicked position.
-                     */
                     if (!ed->sel_active) {
                         ed->sel_anchor_row = ed->cursor_row;
                         ed->sel_anchor_col = ed->cursor_col;
@@ -2187,11 +2518,6 @@ static void gui_handle_mouse(SDL_Event *event)
                     ed->cursor_col  = buf_col;
                     ed->desired_col = buf_col;
                 } else {
-                    /*
-                     * Plain click: clear any existing selection, move
-                     * cursor to clicked position, and set the selection
-                     * anchor here in case the user drags.
-                     */
                     editor_selection_clear(ed);
 
                     ed->cursor_row      = buf_row;
@@ -2201,14 +2527,12 @@ static void gui_handle_mouse(SDL_Event *event)
                     ed->sel_anchor_col  = buf_col;
                 }
 
-                /*
-                 * Start tracking the drag.  If the user releases without
-                 * moving, no selection is created (anchor == cursor).  If
-                 * they drag, MOUSEMOTION will extend the selection.
-                 */
                 g_gui->drag_active = 1;
 
                 editor_scroll(ed);
+
+                /* Save cursor back to the pane */
+                gui_pane_save_from_editor(g_gui->active_pane);
 
                 /* Return focus to editor */
                 ed->filetree_focus = 0;
@@ -2359,6 +2683,18 @@ int gui_main(int argc, char *argv[])
         }
     }
 
+    /*
+     * ---- Initialize the split pane tree ----
+     *
+     * Start with a single leaf pane showing the first buffer.
+     * The pane copies the editor's initial cursor/viewport state.
+     */
+    gui.pane_root = gui_pane_new_leaf(
+        ed.current_buffer,
+        ed.cursor_row, ed.cursor_col, ed.desired_col,
+        ed.view_row, ed.view_col);
+    gui.active_pane = gui.pane_root;
+
     /* ---- Start LSP ---- */
     editor_lsp_start(&ed);
 
@@ -2404,22 +2740,98 @@ int gui_main(int argc, char *argv[])
                     break;
 
                 case SDL_KEYDOWN: {
+                    SDL_Keycode key = event.key.keysym.sym;
+                    int ctrl  = (event.key.keysym.mod & KMOD_CTRL) != 0;
+                    int shift = (event.key.keysym.mod & KMOD_SHIFT) != 0;
+
+                    /*
+                     * ---- Split pane commands (GUI-only) ----
+                     *
+                     * These are intercepted BEFORE ncurses key translation
+                     * so they don't conflict with existing Ctrl+letter bindings.
+                     * All use Ctrl+Shift+key:
+                     *
+                     *   Ctrl+Shift+D   Split horizontal (new pane below)
+                     *   Ctrl+Shift+R   Split vertical (new pane to the right)
+                     *   Ctrl+Shift+W   Close active pane
+                     *   Ctrl+Shift+]   Focus next pane
+                     *   Ctrl+Shift+[   Focus previous pane
+                     */
+                    if (ctrl && shift) {
+                        int handled = 1;
+
+                        if (key == SDLK_d) {
+                            /* Split horizontal — new pane appears below */
+                            gui_pane_save_from_editor(gui.active_pane);
+                            GuiPaneNode *np = gui_pane_split(
+                                gui.active_pane, 0);
+                            if (np) {
+                                gui.active_pane = np;
+                                gui_pane_load_to_editor(np);
+                            }
+                        } else if (key == SDLK_r) {
+                            /* Split vertical — new pane appears to the right */
+                            gui_pane_save_from_editor(gui.active_pane);
+                            GuiPaneNode *np = gui_pane_split(
+                                gui.active_pane, 1);
+                            if (np) {
+                                gui.active_pane = np;
+                                gui_pane_load_to_editor(np);
+                            }
+                        } else if (key == SDLK_w) {
+                            /* Close active pane (only if >1 pane) */
+                            if (gui_pane_count(gui.pane_root) > 1) {
+                                GuiPaneNode *np = gui_pane_close(
+                                    &gui.pane_root, gui.active_pane);
+                                if (np) {
+                                    gui.active_pane = np;
+                                    gui_pane_load_to_editor(np);
+                                }
+                            } else {
+                                /* Only one pane — close buffer as usual */
+                                gui_pane_load_to_editor(gui.active_pane);
+                                gui_set_pane_term_size(gui.active_pane);
+                                input_process_key_with(&ed, GUI_CTRL('w'));
+                                gui_pane_save_from_editor(gui.active_pane);
+                                gui_panes_validate_buffers();
+                            }
+                        } else if (key == SDLK_RIGHTBRACKET) {
+                            /* Focus next pane */
+                            gui_pane_save_from_editor(gui.active_pane);
+                            gui.active_pane = gui_pane_next(
+                                gui.pane_root, gui.active_pane);
+                            gui_pane_load_to_editor(gui.active_pane);
+                            gui_set_pane_term_size(gui.active_pane);
+                        } else if (key == SDLK_LEFTBRACKET) {
+                            /* Focus previous pane */
+                            gui_pane_save_from_editor(gui.active_pane);
+                            gui.active_pane = gui_pane_prev(
+                                gui.pane_root, gui.active_pane);
+                            gui_pane_load_to_editor(gui.active_pane);
+                            gui_set_pane_term_size(gui.active_pane);
+                        } else {
+                            handled = 0;
+                        }
+
+                        if (handled) {
+                            suppress_text_input = 1;
+                            break;
+                        }
+                    }
+
+                    /*
+                     * ---- Normal key processing ----
+                     *
+                     * Load the active pane's state before processing and
+                     * save it back after, so each pane has independent
+                     * cursor/viewport/buffer state.
+                     */
+                    gui_pane_load_to_editor(gui.active_pane);
+                    gui_set_pane_term_size(gui.active_pane);
+
                     int mapped = sdl_to_ncurses_key(event.key.keysym);
                     if (mapped >= 0) {
-                        /*
-                         * System clipboard integration.
-                         *
-                         * The TUI uses an internal clipboard (ed.clipboard)
-                         * because terminals have no direct clipboard access.
-                         * In the GUI, we bridge the system clipboard:
-                         *
-                         *   Ctrl+V: load system clipboard → ed.clipboard
-                         *           BEFORE input.c calls editor_paste.
-                         *
-                         *   Ctrl+C / Ctrl+X: let input.c call editor_copy /
-                         *           editor_cut, THEN push ed.clipboard to
-                         *           the system clipboard.
-                         */
+                        /* System clipboard integration */
                         if (mapped == GUI_CTRL('v')) {
                             char *sys = SDL_GetClipboardText();
                             if (sys && sys[0]) {
@@ -2437,39 +2849,36 @@ int gui_main(int argc, char *argv[])
                                 SDL_SetClipboardText(ed.clipboard);
                         }
 
-                        /*
-                         * Suppress the next SDL_TEXTINPUT — on macOS the
-                         * text input system can generate spurious text
-                         * events for Ctrl+key combos (especially Ctrl+V).
-                         */
                         suppress_text_input = 1;
                     }
+
+                    /* Save state back to the pane (captures any changes) */
+                    gui_pane_save_from_editor(gui.active_pane);
+
+                    /* Validate all pane buffer indices after potential close */
+                    gui_panes_validate_buffers();
+
                     break;
                 }
 
                 case SDL_TEXTINPUT: {
-                    /*
-                     * If we just handled a Ctrl+key combo, skip this
-                     * event — it may contain system clipboard contents
-                     * or control characters we don't want inserted.
-                     */
                     if (suppress_text_input) {
                         suppress_text_input = 0;
                         break;
                     }
 
-                    /*
-                     * Normal printable character input.  We pass each
-                     * character to input_process_key_with so auto-close
-                     * brackets and other character-level logic in
-                     * input.c works correctly.
-                     */
+                    /* Load pane state for character input */
+                    gui_pane_load_to_editor(gui.active_pane);
+                    gui_set_pane_term_size(gui.active_pane);
+
                     for (int i = 0; event.text.text[i]; i++) {
                         unsigned char c = (unsigned char)event.text.text[i];
                         if (c >= 0x20 && c <= 0x7e) {
                             input_process_key_with(&ed, c);
                         }
                     }
+
+                    gui_pane_save_from_editor(gui.active_pane);
                     break;
                 }
 
@@ -2492,6 +2901,9 @@ int gui_main(int argc, char *argv[])
 
     /* ---- Cleanup ---- */
     SDL_StopTextInput();
+    gui_pane_free(gui.pane_root);
+    gui.pane_root = NULL;
+    gui.active_pane = NULL;
     editor_cleanup(&ed);
 
     if (gui.font_bold && gui.font_bold != gui.font)
