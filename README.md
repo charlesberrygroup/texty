@@ -59,6 +59,14 @@ A terminal-based IDE written in C, built from scratch. Runs in the terminal (ncu
 - Signature help (via command palette) — show function parameter info
 - Configure in `texty.json`: `{"lsp_servers": {"c": "clangd"}}`
 
+### Split Panes (GUI only)
+- Split editor vertically (Ctrl+Shift+R) or horizontally (Ctrl+Shift+D)
+- Each pane has independent cursor, viewport, and buffer
+- Click a pane to focus it, or cycle with Ctrl+Shift+] / Ctrl+Shift+[
+- Close a pane with Ctrl+Shift+W
+- Mouse scroll targets the pane under the cursor
+- Active pane highlighted with a blue border
+
 ### Themes
 - 4 built-in themes: Default Dark, Default Light, Monokai, Gruvbox Dark
 - Cycle themes with F6
@@ -178,6 +186,16 @@ Create a `texty.json` in your project root:
 | F7               | Go to symbol in file                            |
 | F8               | Command palette                                 |
 
+### Split panes (GUI only)
+
+| Key              | Action                               |
+|------------------|--------------------------------------|
+| Ctrl+Shift+R     | Split vertical (new pane right)      |
+| Ctrl+Shift+D     | Split horizontal (new pane below)    |
+| Ctrl+Shift+W     | Close active pane                    |
+| Ctrl+Shift+]     | Focus next pane                      |
+| Ctrl+Shift+[     | Focus previous pane                  |
+
 ### View
 
 | Key              | Action                               |
@@ -259,7 +277,8 @@ src/
   buffer.h/c    — Text buffer (array of lines)
   editor.h/c    — Editor state, cursor movement, text operations
   display.h/c   — ncurses terminal rendering
-  gui.h/c       — SDL2 graphical frontend (./texty -G)
+  gui.h/c       — SDL2 graphical frontend (./texty -G), split panes
+  gui_pane.h/c  — Split pane tree logic (binary tree layout)
   input.h/c     — Keyboard input dispatch
   undo.h/c      — Undo / redo stack
   syntax.h/c    — Syntax highlighting
@@ -274,7 +293,7 @@ tests/
   test_runner.h — Minimal test framework
   test_buffer.c, test_editor.c, test_undo.c, test_syntax.c,
   test_filetree.c, test_git.c, test_build.c, test_finder.c,
-  test_theme.c  — 663 unit tests
+  test_theme.c, test_gui_pane.c  — 975 unit tests
   display_stub.c — ncurses stubs for testing
 Makefile        — Build system (make, make test, make test-debug)
 TODO.md         — Phased development roadmap

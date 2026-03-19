@@ -96,7 +96,7 @@ A cross-platform terminal IDE written in C, built in phases.
 
 ## Backlog / Ideas
 
-- Mouse support (click to position cursor, scroll wheel)
+- Mouse support in TUI (click to position cursor, scroll wheel — already in GUI)
 - Minimap (overview of file on the right side)
 - Breadcrumb navigation (shows current function/class in status bar)
 - Macro recording and playback
